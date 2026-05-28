@@ -268,7 +268,7 @@ public:
     }
 
     // Recurse into a sub-API: every command/event the sub declares is
-    // emitted with "key." prepended on the wire and in
+    // emitted with "key::" prepended on the wire and in
     // DescribeReflector. The current API-instance pointer is swapped
     // for &sub for the duration of the recursion so concrete
     // reflectors that install pmf handlers cast against the right
@@ -334,10 +334,16 @@ private:
             reflect(*this, sub);
     }
 
-    // Joins active prefixes with '.' and appends `local`. Empty prefix
+    // Joins active prefixes with "::" and appends `local`. Empty prefix
     // frames (from no-key use) contribute nothing. Result is a fresh
     // std::string the caller keeps alive for the duration of
     // commandImpl/eventImpl, which copies the name immediately.
+    //
+    // "::" (not ".") is the namespace separator the codegen splits on to
+    // build nested objects — see CommandExport ("Commands whose names
+    // contain \"::\" become nested objects") and CppClient ("::" -> "_").
+    // A "." here produces a single un-split segment, so codegen emits the
+    // dotted name as one bare JS key (invalid TS).
     std::string joinedName(std::string_view local) const
     {
         auto out = std::string {};
@@ -346,7 +352,7 @@ private:
             if (f.prefix.empty())
                 continue;
             out += f.prefix;
-            out += '.';
+            out += "::";
         }
         out += local;
         return out;

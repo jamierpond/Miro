@@ -13,12 +13,8 @@ namespace Miro::TypeScript
 
 using TypeTree::TypeNode;
 
-namespace
-{
-
-// Returns `name` ready to drop into a JS object literal or TS interface
-// as a property key. Bare identifier when possible; otherwise a JSON-
-// quoted string with `\` and `"` escaped.
+// Bare identifier when `name` is a valid JS identifier, otherwise a
+// JSON-quoted string with `\` and `"` escaped. See the header.
 std::string formatPropertyKey(std::string_view name)
 {
     if (Detail::isJsIdentifier(name))
@@ -34,6 +30,9 @@ std::string formatPropertyKey(std::string_view name)
     out += '"';
     return out;
 }
+
+namespace
+{
 
 std::string_view zodPrimitive(TypeTree::PrimitiveKind kind)
 {

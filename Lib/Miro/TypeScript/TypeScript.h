@@ -4,9 +4,18 @@
 
 #include <span>
 #include <string>
+#include <string_view>
 
 namespace Miro::TypeScript
 {
+
+// Formats `name` for use as a property key in a JS object literal or TS
+// interface: a bare identifier when `name` is a valid JS identifier,
+// otherwise a JSON-quoted string (with `\` and `"` escaped). Names that
+// carry a sub-API namespace separator ("a::b") aren't bare identifiers,
+// so quoting them keeps the emitted module valid. Shared so other
+// codegen layers (e.g. eacp's events module) key the same way.
+std::string formatPropertyKey(std::string_view name);
 
 // The format functions take their roots by mutable reference because
 // emission may rewrite per-node `typeName` to disambiguate types from

@@ -538,7 +538,7 @@ auto arDescribeDrivesBackendFormat =
 //
 // A reflect() body can defer to a member's own reflect() via
 // r.use("key", member); all commands/events the sub declares land
-// under "key.<name>". The same dual dispatch as the data layer is
+// under "key::<name>". The same dual dispatch as the data layer is
 // supported — intrusive Sub::reflect(ApiReflector&) or a free
 // reflect(ApiReflector&, Sub&) overload.
 
@@ -597,13 +597,13 @@ public:
 } // namespace
 
 auto arSubApiBindsPrefixedCommand =
-    test("ApiReflector: r.use(key, sub) installs sub commands under key.<name>") = []
+    test("ApiReflector: r.use(key, sub) installs sub commands under key::<name>") = []
 {
     auto api = CompositeApi {};
     auto bridge = Bridge {};
     bridge.use(api);
 
-    auto result = bridge.dispatch("files.read", Json::parse(R"({"text":"x"})"));
+    auto result = bridge.dispatch("files::read", Json::parse(R"({"text":"x"})"));
 
     check(result["echoed"].asString() == "read:x");
     check(api.files.reads == 1);
@@ -631,7 +631,7 @@ auto arSubApiEventPrefixed = test(
 
     api.files.changed.publish(ARRes {"hello"});
 
-    check(capture.lastEvent == "files.changed");
+    check(capture.lastEvent == "files::changed");
     check(capture.lastPayload["echoed"].asString() == "hello");
 };
 
@@ -643,7 +643,7 @@ auto arSubApiCommandRoutesToSubInstance =
     auto bridge = Bridge {};
     bridge.use(api);
 
-    bridge.dispatch("files.write", Json::parse(R"({"text":"trace"})"));
+    bridge.dispatch("files::write", Json::parse(R"({"text":"trace"})"));
 
     check(api.files.lastWritten == "trace");
 };
@@ -655,10 +655,10 @@ auto arSubApiMultipleSiblings =
     auto bridge = Bridge {};
     bridge.use(api);
 
-    check(bridge.dispatch("users.list", JSON {})["echoed"].asString()
+    check(bridge.dispatch("users::list", JSON {})["echoed"].asString()
           == "alice,bob");
 
-    check(bridge.dispatch("files.read", Json::parse(R"({"text":"y"})"))["echoed"]
+    check(bridge.dispatch("files::read", Json::parse(R"({"text":"y"})"))["echoed"]
               .asString()
           == "read:y");
 };
@@ -672,11 +672,11 @@ auto arSubApiDescribeNamesArePrefixed =
     api.reflect(describe);
 
     check(findCmd(describe.commands, "topPing") != nullptr);
-    check(findCmd(describe.commands, "files.read") != nullptr);
-    check(findCmd(describe.commands, "files.write") != nullptr);
-    check(findCmd(describe.commands, "users.list") != nullptr);
+    check(findCmd(describe.commands, "files::read") != nullptr);
+    check(findCmd(describe.commands, "files::write") != nullptr);
+    check(findCmd(describe.commands, "users::list") != nullptr);
 
-    check(findEvt(describe.events, "files.changed") != nullptr);
+    check(findEvt(describe.events, "files::changed") != nullptr);
 
     // The unprefixed names must not appear — would mean we leaked the
     // local name through alongside the prefixed one.
@@ -685,7 +685,7 @@ auto arSubApiDescribeNamesArePrefixed =
     check(findEvt(describe.events, "changed") == nullptr);
 };
 
-// ---------- Nested use(): prefixes accumulate with '.' ----------
+// ---------- Nested use(): prefixes accumulate with "::" ----------
 
 namespace
 {
@@ -715,13 +715,13 @@ public:
 } // namespace
 
 auto arSubApiNestedPrefixAccumulates =
-    test("ApiReflector: nested r.use(...) calls accumulate prefixes with '.'") = []
+    test("ApiReflector: nested r.use(...) calls accumulate prefixes with '::'") = []
 {
     auto api = OuterNestedApi {};
     auto bridge = Bridge {};
     bridge.use(api);
 
-    auto result = bridge.dispatch("outer.inner.ping", JSON {});
+    auto result = bridge.dispatch("outer::inner::ping", JSON {});
     check(result["echoed"].asString() == "deep-pong");
 };
 
@@ -733,7 +733,7 @@ auto arSubApiNestedDescribeNames = test(
     api.reflect(describe);
 
     check(describe.commands.size() == 1);
-    check(describe.commands[0].name == "outer.inner.ping");
+    check(describe.commands[0].name == "outer::inner::ping");
 };
 
 // ---------- Free-function reflect overload (non-intrusive) ----------
@@ -777,7 +777,7 @@ auto arSubApiFreeFunctionDispatch = test(
     auto bridge = Bridge {};
     bridge.use(api);
 
-    check(bridge.dispatch("ext.hello", JSON {})["echoed"].asString() == "external");
+    check(bridge.dispatch("ext::hello", JSON {})["echoed"].asString() == "external");
 };
 
 // ---------- Flat use(sub): split one API across helpers, no prefix ----------
@@ -857,7 +857,7 @@ public:
 } // namespace
 
 auto arSubApiMacroBindsPrefixed = test(
-    "ApiReflector: MIRO_API(r, a, b) installs sub commands under a.<name> / b.<name>") =
+    "ApiReflector: MIRO_API(r, a, b) installs sub commands under a::<name> / b::<name>") =
     []
 {
     auto api = MacroCompositeApi {};
@@ -865,10 +865,10 @@ auto arSubApiMacroBindsPrefixed = test(
     bridge.use(api);
 
     check(bridge.dispatch("topPing", JSON {})["echoed"].asString() == "macro-pong");
-    check(bridge.dispatch("files.read", Json::parse(R"({"text":"q"})"))["echoed"]
+    check(bridge.dispatch("files::read", Json::parse(R"({"text":"q"})"))["echoed"]
               .asString()
           == "read:q");
-    check(bridge.dispatch("users.list", JSON {})["echoed"].asString()
+    check(bridge.dispatch("users::list", JSON {})["echoed"].asString()
           == "alice,bob");
 };
 
@@ -881,8 +881,8 @@ auto arSubApiMacroDescribePrefixed = test(
     api.reflect(describe);
 
     check(findCmd(describe.commands, "topPing") != nullptr);
-    check(findCmd(describe.commands, "files.read") != nullptr);
-    check(findCmd(describe.commands, "files.write") != nullptr);
-    check(findCmd(describe.commands, "users.list") != nullptr);
-    check(findEvt(describe.events, "files.changed") != nullptr);
+    check(findCmd(describe.commands, "files::read") != nullptr);
+    check(findCmd(describe.commands, "files::write") != nullptr);
+    check(findCmd(describe.commands, "users::list") != nullptr);
+    check(findEvt(describe.events, "files::changed") != nullptr);
 };

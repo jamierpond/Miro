@@ -92,7 +92,9 @@
 // body, defer to a list of sub-API members using each one's identifier
 // as the wire-name prefix. Expands `MIRO_API(r, files, users)` to
 // `r.use("files", files); r.use("users", users);` — each sub's
-// commands/events land under "files.<name>" and "users.<name>".
+// commands/events land under "files::<name>" and "users::<name>"
+// ("::" is the namespace separator the codegen nests on; see
+// ApiReflector::joinedName).
 //
 // Requires <Miro/Miro.h> (or Bridge/ApiReflector.h directly) in scope
 // at expansion — the macro does not include it.

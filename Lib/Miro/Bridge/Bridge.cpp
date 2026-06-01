@@ -3,6 +3,13 @@
 namespace Miro
 {
 
+void Bridge::dispatch(std::string_view command,
+                      const JSON& payloadToUse,
+                      const CommandTable::Reply& reply) const
+{
+    commands.dispatch(command, payloadToUse, reply);
+}
+
 JSON Bridge::dispatch(std::string_view command, const JSON& payloadToUse) const
 {
     return commands.dispatch(command, payloadToUse);

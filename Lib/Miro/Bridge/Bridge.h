@@ -73,6 +73,16 @@ public:
 
     void emit(const std::string& eventToUse) { emitJson(eventToUse, JSON {}); }
 
+    // Async-capable dispatch — forwards to CommandTable::dispatch(reply).
+    // The reply continuation fires inline for synchronous commands and on
+    // a later turn for awaitable ones. Transports that can defer their
+    // wire reply (the WebView bridge) use this form.
+    void dispatch(std::string_view command,
+                  const JSON& payloadToUse,
+                  const CommandTable::Reply& reply) const;
+
+    // Synchronous convenience — returns the result for sync handlers,
+    // throws for asynchronous ones. Used by the HTTP RPC server and tests.
     JSON dispatch(std::string_view command, const JSON& payloadToUse) const;
 
     // Walks api.reflect(...) with a BindReflector — each command lands

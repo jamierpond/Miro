@@ -211,8 +211,13 @@ public:
 
         if constexpr (Info::hasReq)
             d.req = Detail::makeTypeInfo<typename Info::Req>();
-        if constexpr (Info::hasRes)
-            d.res = Detail::makeTypeInfo<typename Info::Res>();
+        // Unwrap awaitable results (e.g. Async<T>) so codegen emits the
+        // settled wire type T — the bridge serialises the resolved value,
+        // never the wrapper. Async<void> unwraps to void and elides the
+        // response side, exactly like a synchronous void command.
+        using Res = Detail::AwaitResultT<typename Info::Res>;
+        if constexpr (!std::is_void_v<Res>)
+            d.res = Detail::makeTypeInfo<Res>();
 
         d.makeHandler = [method](void* apiInstance) -> CommandTable::RawHandler
         {
@@ -251,8 +256,13 @@ public:
 
         if constexpr (Info::hasReq)
             d.req = Detail::makeTypeInfo<typename Info::Req>();
-        if constexpr (Info::hasRes)
-            d.res = Detail::makeTypeInfo<typename Info::Res>();
+        // Unwrap awaitable results (e.g. Async<T>) so codegen emits the
+        // settled wire type T — the bridge serialises the resolved value,
+        // never the wrapper. Async<void> unwraps to void and elides the
+        // response side, exactly like a synchronous void command.
+        using Res = Detail::AwaitResultT<typename Info::Res>;
+        if constexpr (!std::is_void_v<Res>)
+            d.res = Detail::makeTypeInfo<Res>();
 
         d.makeHandler = [](void*) -> CommandTable::RawHandler
         {
@@ -288,8 +298,13 @@ public:
 
         if constexpr (Info::hasReq)
             d.req = Detail::makeTypeInfo<typename Info::Req>();
-        if constexpr (Info::hasRes)
-            d.res = Detail::makeTypeInfo<typename Info::Res>();
+        // Unwrap awaitable results (e.g. Async<T>) so codegen emits the
+        // settled wire type T — the bridge serialises the resolved value,
+        // never the wrapper. Async<void> unwraps to void and elides the
+        // response side, exactly like a synchronous void command.
+        using Res = Detail::AwaitResultT<typename Info::Res>;
+        if constexpr (!std::is_void_v<Res>)
+            d.res = Detail::makeTypeInfo<Res>();
 
         d.makeHandler = [c = std::move(callable)](void*) mutable
             -> CommandTable::RawHandler

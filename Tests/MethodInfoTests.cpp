@@ -53,6 +53,23 @@ public:
     int calls = 0;
 };
 
+// makePmfHandler now yields a reply-based RawHandler (JSON in, result
+// delivered through a continuation) so it can carry async commands too.
+// These thunks all settle inline, so this helper drives one synchronously
+// and returns its JSON — keeping the round-trip assertions below intact.
+inline JSON callThunk(const CommandTable::RawHandler& handler, const JSON& payload)
+{
+    auto out = JSON {};
+    handler(payload,
+            [&out](const JSON& result, const std::string* error)
+            {
+                if (error != nullptr)
+                    throw std::runtime_error(*error);
+                out = result;
+            });
+    return out;
+}
+
 } // namespace
 
 // ---------- Compile-time deductions ----------
@@ -91,7 +108,7 @@ auto miThunkEcho = test("MethodInfo: Res(Req) thunk round-trips JSON") = []
     auto handler = makePmfHandler<&TestApi::echo>(api);
 
     auto payload = Json::parse(R"({"text":"hi"})");
-    auto result = handler(payload);
+    auto result = callThunk(handler, payload);
 
     check(result.isObject());
     check(result["echoed"].asString() == "hi!");
@@ -103,10 +120,10 @@ auto miThunkStatus =
     auto api = TestApi {};
     auto handler = makePmfHandler<&TestApi::status>(api);
 
-    check(handler(JSON {})["echoed"].asString() == "idle");
+    check(callThunk(handler, JSON {})["echoed"].asString() == "idle");
 
     api.lastLogged = "x";
-    check(handler(JSON {})["echoed"].asString() == "busy");
+    check(callThunk(handler, JSON {})["echoed"].asString() == "busy");
 };
 
 auto miThunkLog =
@@ -116,7 +133,7 @@ auto miThunkLog =
     auto handler = makePmfHandler<&TestApi::log>(api);
 
     auto payload = Json::parse(R"({"text":"trace"})");
-    auto result = handler(payload);
+    auto result = callThunk(handler, payload);
 
     check(result.isNull());
     check(api.lastLogged == "trace");
@@ -128,7 +145,7 @@ auto miThunkTick =
     auto api = TestApi {};
     auto handler = makePmfHandler<&TestApi::tick>(api);
 
-    auto result = handler(JSON {});
+    auto result = callThunk(handler, JSON {});
 
     check(result.isNull());
     check(api.ticks == 1);
@@ -142,9 +159,9 @@ auto miInstancePersists =
     auto api = TestApi {};
     auto tick = makePmfHandler<&TestApi::tick>(api);
 
-    tick(JSON {});
-    tick(JSON {});
-    tick(JSON {});
+    callThunk(tick, JSON {});
+    callThunk(tick, JSON {});
+    callThunk(tick, JSON {});
 
     check(api.ticks == 3);
 };
@@ -182,7 +199,7 @@ auto miRuntimeEcho =
     auto api = TestApi {};
     auto handler = makePmfHandler(&TestApi::echo, api);
 
-    auto result = handler(Json::parse(R"({"text":"hi"})"));
+    auto result = callThunk(handler, Json::parse(R"({"text":"hi"})"));
 
     check(result["echoed"].asString() == "hi!");
 };
@@ -193,10 +210,10 @@ auto miRuntimeStatus =
     auto api = TestApi {};
     auto handler = makePmfHandler(&TestApi::status, api);
 
-    check(handler(JSON {})["echoed"].asString() == "idle");
+    check(callThunk(handler, JSON {})["echoed"].asString() == "idle");
 
     api.lastLogged = "x";
-    check(handler(JSON {})["echoed"].asString() == "busy");
+    check(callThunk(handler, JSON {})["echoed"].asString() == "busy");
 };
 
 auto miRuntimeLog =
@@ -205,7 +222,7 @@ auto miRuntimeLog =
     auto api = TestApi {};
     auto handler = makePmfHandler(&TestApi::log, api);
 
-    auto result = handler(Json::parse(R"({"text":"trace"})"));
+    auto result = callThunk(handler, Json::parse(R"({"text":"trace"})"));
 
     check(result.isNull());
     check(api.lastLogged == "trace");
@@ -217,8 +234,8 @@ auto miRuntimeTick =
     auto api = TestApi {};
     auto handler = makePmfHandler(&TestApi::tick, api);
 
-    handler(JSON {});
-    handler(JSON {});
+    callThunk(handler, JSON {});
+    callThunk(handler, JSON {});
 
     check(api.ticks == 2);
 };
@@ -233,8 +250,8 @@ auto miRuntimeAgreesWithTemplate =
 
     auto payload = Json::parse(R"({"text":"same"})");
 
-    auto fromRuntime = runtimeHandler(payload);
-    auto fromTemplate = templateHandler(payload);
+    auto fromRuntime = callThunk(runtimeHandler, payload);
+    auto fromTemplate = callThunk(templateHandler, payload);
 
     check(fromRuntime["echoed"].asString() == fromTemplate["echoed"].asString());
     check(api.calls == 2);

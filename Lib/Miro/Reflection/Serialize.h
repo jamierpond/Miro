@@ -1,7 +1,8 @@
 #pragma once
 
-#include "ConstexprJson.h"
 #include "../YAML/Yaml.h"
+#include "ConstexprJson.h"
+#include "ConstexprYaml.h"
 #include "JsonReflector.h"
 #include "ReflectContainers.h"
 #include "ReflectDispatch.h"
@@ -148,9 +149,16 @@ T createFromYAML(const YAML& yaml)
     return createFromJSON<T>(yaml);
 }
 
+// Like their JSON siblings, the YAML string functions are usable in
+// constant expressions for constexpr-reflectable types; at compile
+// time they route through the Detail::ConstexprYaml mirror, at
+// runtime nothing changes.
 template <typename T>
-std::string toYAMLString(const T& value, int indent = 2)
+constexpr std::string toYAMLString(const T& value, int indent = 2)
 {
+    if (std::is_constant_evaluated())
+        return Detail::ConstexprYaml::toText(value, indent);
+
     return Yaml::print(toYAML(value), indent);
 }
 
@@ -161,15 +169,23 @@ void logYAML(const T& value, int indent = 2)
 }
 
 template <typename T>
-void fromYAMLString(T& value, std::string_view yamlString)
+constexpr void fromYAMLString(T& value, std::string_view yamlString)
 {
+    if (std::is_constant_evaluated())
+    {
+        Detail::ConstexprYaml::fromText(value, yamlString);
+        return;
+    }
+
     fromYAML(value, Yaml::parse(yamlString));
 }
 
 template <typename T>
-T createFromYAMLString(std::string_view yamlString)
+constexpr T createFromYAMLString(std::string_view yamlString)
 {
-    return createFromYAML<T>(Yaml::parse(yamlString));
+    auto value = T {};
+    fromYAMLString(value, yamlString);
+    return value;
 }
 
 } // namespace Miro

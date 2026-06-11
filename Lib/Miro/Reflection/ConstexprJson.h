@@ -3,6 +3,7 @@
 #include "../JSON/Json.h"
 #include "ReflectDispatch.h"
 
+#include <bit>
 #include <concepts>
 #include <cstdint>
 #include <limits>
@@ -420,6 +421,9 @@ constexpr void printGeneral(std::string& output, double valueToUse)
 {
     if (valueToUse != valueToUse)
     {
+        if (std::bit_cast<std::uint64_t>(valueToUse) >> 63)
+            output += '-';
+
         output += "nan";
         return;
     }
@@ -707,6 +711,37 @@ constexpr double scalePowerOfTen(double valueToUse, int exponentToUse)
         return valueToUse / powers[-exponentToUse];
 
     return valueToUse;
+}
+
+constexpr int hexDigitValue(char c)
+{
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+
+    return -1;
+}
+
+constexpr void appendUtf8(std::string& result, unsigned codepoint)
+{
+    if (codepoint <= 0x7F)
+    {
+        result += static_cast<char>(codepoint);
+    }
+    else if (codepoint <= 0x7FF)
+    {
+        result += static_cast<char>(0xC0 | (codepoint >> 6));
+        result += static_cast<char>(0x80 | (codepoint & 0x3F));
+    }
+    else
+    {
+        result += static_cast<char>(0xE0 | (codepoint >> 12));
+        result += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+        result += static_cast<char>(0x80 | (codepoint & 0x3F));
+    }
 }
 
 class Parser
@@ -1048,7 +1083,7 @@ private:
 
         for (auto i = std::size_t {0}; i < 4; ++i)
         {
-            auto digit = hexDigit(input[pos + i]);
+            auto digit = hexDigitValue(input[pos + i]);
 
             if (digit < 0)
                 error("invalid unicode escape");
@@ -1058,37 +1093,6 @@ private:
 
         pos += 4;
         appendUtf8(result, codepoint);
-    }
-
-    static constexpr int hexDigit(char c)
-    {
-        if (c >= '0' && c <= '9')
-            return c - '0';
-        if (c >= 'a' && c <= 'f')
-            return c - 'a' + 10;
-        if (c >= 'A' && c <= 'F')
-            return c - 'A' + 10;
-
-        return -1;
-    }
-
-    static constexpr void appendUtf8(std::string& result, unsigned codepoint)
-    {
-        if (codepoint <= 0x7F)
-        {
-            result += static_cast<char>(codepoint);
-        }
-        else if (codepoint <= 0x7FF)
-        {
-            result += static_cast<char>(0xC0 | (codepoint >> 6));
-            result += static_cast<char>(0x80 | (codepoint & 0x3F));
-        }
-        else
-        {
-            result += static_cast<char>(0xE0 | (codepoint >> 12));
-            result += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
-            result += static_cast<char>(0x80 | (codepoint & 0x3F));
-        }
     }
 
     // --- Containers ---

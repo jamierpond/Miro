@@ -16,6 +16,7 @@
 #include "Reflection/JsonReflector.h"
 #include "Reflection/XmlReflector.h"
 #include "XML/Xml.h"
+#include "YAML/Yaml.h"
 #include "Reflection/ReflectContainers.h"
 #include "Reflection/ReflectDispatch.h"
 #include "Reflection/ReflectEnum.h"

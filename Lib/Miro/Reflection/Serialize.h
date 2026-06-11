@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ConstexprJson.h"
+#include "../YAML/Yaml.h"
 #include "JsonReflector.h"
 #include "ReflectContainers.h"
 #include "ReflectDispatch.h"
@@ -124,6 +125,51 @@ template <typename T>
 T createFromXMLString(std::string_view xmlString)
 {
     return createFromXML<T>(Xml::parse(xmlString));
+}
+
+// YAML shares the JSON value model (Yaml::Value is Json::Value), so
+// the reflection walk reuses JsonReflector — only the string layer
+// (Yaml::parse / Yaml::print) is YAML-specific.
+template <typename T>
+YAML toYAML(const T& value)
+{
+    return toJSON(value);
+}
+
+template <typename T>
+void fromYAML(T& value, const YAML& yaml)
+{
+    fromJSON(value, yaml);
+}
+
+template <typename T>
+T createFromYAML(const YAML& yaml)
+{
+    return createFromJSON<T>(yaml);
+}
+
+template <typename T>
+std::string toYAMLString(const T& value, int indent = 2)
+{
+    return Yaml::print(toYAML(value), indent);
+}
+
+template <typename T>
+void logYAML(const T& value, int indent = 2)
+{
+    Yaml::log(toYAML(value), indent);
+}
+
+template <typename T>
+void fromYAMLString(T& value, std::string_view yamlString)
+{
+    fromYAML(value, Yaml::parse(yamlString));
+}
+
+template <typename T>
+T createFromYAMLString(std::string_view yamlString)
+{
+    return createFromYAML<T>(Yaml::parse(yamlString));
 }
 
 } // namespace Miro

@@ -17,6 +17,8 @@ add_library(Miro STATIC
     Miro/XML/Xml.cpp
     Miro/XML/Parser.cpp
     Miro/XML/Printer.cpp
+    Miro/YAML/Parser.cpp
+    Miro/YAML/Printer.cpp
     Miro/Reflection/Any.cpp
     Miro/Reflection/CommandTable.cpp
     Miro/Reflection/JsonReflector.cpp

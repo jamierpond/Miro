@@ -16,7 +16,7 @@ class Reflector;
 struct Property
 {
     template <typename T>
-    void operator()(T& value);
+    constexpr void operator()(T& value);
 
     Reflector& reflector;
     std::string_view key;
@@ -25,7 +25,7 @@ struct Property
 struct Element
 {
     template <typename T>
-    void operator()(T& value);
+    constexpr void operator()(T& value);
 
     Reflector& reflector;
     std::size_t index;
@@ -90,23 +90,23 @@ struct PrimitiveRef
 {
     using Variant = std::variant<bool*, int*, double*, std::string*, std::int64_t*>;
 
-    PrimitiveRef(bool& value)
+    constexpr PrimitiveRef(bool& value)
         : data(&value)
     {
     }
-    PrimitiveRef(int& value)
+    constexpr PrimitiveRef(int& value)
         : data(&value)
     {
     }
-    PrimitiveRef(double& value)
+    constexpr PrimitiveRef(double& value)
         : data(&value)
     {
     }
-    PrimitiveRef(std::string& value)
+    constexpr PrimitiveRef(std::string& value)
         : data(&value)
     {
     }
-    PrimitiveRef(std::int64_t& value)
+    constexpr PrimitiveRef(std::int64_t& value)
         : data(&value)
     {
     }
@@ -119,26 +119,32 @@ struct PrimitiveRef
 // via Options and stored in the base — most queries are non-virtual.
 // Recursion happens via atKey/atIndex, which return a child reflector
 // owned by this one.
+//
+// The non-virtual surface (and the defaults that a compile-time walk
+// reaches) is constexpr so that a reflector whose overrides are
+// themselves constexpr can drive a reflect() body during constant
+// evaluation — see Reflection/ConstexprJson.h. Runtime reflectors are
+// unaffected: an override need not be constexpr.
 class Reflector
 {
 public:
-    explicit Reflector(Options optsToUse)
+    constexpr explicit Reflector(Options optsToUse)
         : opts(optsToUse)
     {
     }
 
     virtual ~Reflector() = default;
 
-    Property operator[](std::string_view key);
-    Element operator[](std::size_t index);
+    constexpr Property operator[](std::string_view key) { return {*this, key}; }
+    constexpr Element operator[](std::size_t index) { return {*this, index}; }
 
-    const Options& options() const { return opts; }
-    Mode mode() const { return opts.mode; }
-    Shape shape() const { return opts.shape; }
-    bool isSaving() const { return opts.mode == Mode::Save; }
-    bool isLoading() const { return opts.mode == Mode::Load; }
-    bool isSchema() const { return opts.schema; }
-    bool isNullable() const { return opts.nullable; }
+    constexpr const Options& options() const { return opts; }
+    constexpr Mode mode() const { return opts.mode; }
+    constexpr Shape shape() const { return opts.shape; }
+    constexpr bool isSaving() const { return opts.mode == Mode::Save; }
+    constexpr bool isLoading() const { return opts.mode == Mode::Load; }
+    constexpr bool isSchema() const { return opts.schema; }
+    constexpr bool isNullable() const { return opts.nullable; }
 
     // Per-slot operations that depend on the concrete reflector kind.
     virtual void visit(PrimitiveRef ref) = 0;
@@ -152,7 +158,7 @@ public:
     // dispatcher to skip the body — used to break recursion when the
     // same type is already being walked further up the chain, or when
     // the reflector has emitted a name reference instead of inlining.
-    virtual bool beginNamedType(TypeId /*id*/) { return true; }
+    constexpr virtual bool beginNamedType(TypeId /*id*/) { return true; }
 
     // Called by the enum dispatcher in schema mode with the enum's
     // identity and the ordered list of valid enumerator names.

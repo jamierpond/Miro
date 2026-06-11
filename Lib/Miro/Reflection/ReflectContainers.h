@@ -14,7 +14,7 @@ namespace Miro::Detail
 {
 
 template <typename T>
-void reflectValue(Reflector& ref, std::vector<T>& value)
+constexpr void reflectValue(Reflector& ref, std::vector<T>& value)
 {
     auto childOpts = childOptionsFor<T>(ref.options());
 
@@ -41,7 +41,7 @@ void reflectValue(Reflector& ref, std::vector<T>& value)
 }
 
 template <typename T, std::size_t N>
-void reflectValue(Reflector& ref, std::array<T, N>& value)
+constexpr void reflectValue(Reflector& ref, std::array<T, N>& value)
 {
     auto childOpts = childOptionsFor<T>(ref.options());
 
@@ -100,7 +100,7 @@ void reflectValue(Reflector& ref, std::map<std::string, V>& value)
 }
 
 template <typename T>
-void reflectValue(Reflector& ref, std::optional<T>& value)
+constexpr void reflectValue(Reflector& ref, std::optional<T>& value)
 {
     if (ref.isSaving())
     {

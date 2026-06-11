@@ -180,16 +180,16 @@ constexpr Options topLevelOptions(Mode mode, bool schema = false)
 // declarations must be visible here so Phase-1 lookup inside Property's
 // templated operator() can see them as candidates.
 template <typename T>
-void reflectValue(Reflector& ref, std::vector<T>& value);
+constexpr void reflectValue(Reflector& ref, std::vector<T>& value);
 
 template <typename T, std::size_t N>
-void reflectValue(Reflector& ref, std::array<T, N>& value);
+constexpr void reflectValue(Reflector& ref, std::array<T, N>& value);
 
 template <typename V>
 void reflectValue(Reflector& ref, std::map<std::string, V>& value);
 
 template <typename T>
-void reflectValue(Reflector& ref, std::optional<T>& value);
+constexpr void reflectValue(Reflector& ref, std::optional<T>& value);
 
 template <typename T, typename Allocator>
 void reflectValue(Reflector& ref, Vector<T, Allocator>& value);
@@ -208,50 +208,58 @@ void reflectValue(Reflector& ref, std::variant<Ts...>& value);
 
 template <typename T>
     requires std::is_enum_v<T>
-void reflectValue(Reflector& ref, T& value);
+constexpr void reflectValue(Reflector& ref, T& value);
 
-inline void reflectValue(Reflector& ref, bool& value)
+constexpr void reflectValue(Reflector& ref, bool& value)
 {
     ref.visit(value);
 }
 
-inline void reflectValue(Reflector& ref, int& value)
+constexpr void reflectValue(Reflector& ref, int& value)
 {
     ref.visit(value);
 }
 
-inline void reflectValue(Reflector& ref, double& value)
+constexpr void reflectValue(Reflector& ref, double& value)
 {
     ref.visit(value);
 }
 
-inline void reflectValue(Reflector& ref, std::string& value)
+constexpr void reflectValue(Reflector& ref, std::string& value)
 {
     ref.visit(value);
 }
 
-inline void reflectValue(Reflector& ref, std::int64_t& value)
+constexpr void reflectValue(Reflector& ref, std::int64_t& value)
 {
     ref.visit(value);
 }
 
+// The widened copy is only written back when loading — saving never
+// changes the value, and skipping the writeback lets a constant
+// evaluation serialize a const object (writing through the
+// const_cast in toJSON/toJSONString would otherwise be rejected).
 template <std::integral T>
     requires(!std::same_as<T, bool> && !std::same_as<T, int>
              && !std::same_as<T, std::int64_t>)
-void reflectValue(Reflector& ref, T& value)
+constexpr void reflectValue(Reflector& ref, T& value)
 {
     auto wide = static_cast<std::int64_t>(value);
     ref.visit(wide);
-    value = static_cast<T>(wide);
+
+    if (ref.isLoading())
+        value = static_cast<T>(wide);
 }
 
 template <std::floating_point T>
     requires(!std::same_as<T, double>)
-void reflectValue(Reflector& ref, T& value)
+constexpr void reflectValue(Reflector& ref, T& value)
 {
     auto wide = static_cast<double>(value);
     ref.visit(wide);
-    value = static_cast<T>(wide);
+
+    if (ref.isLoading())
+        value = static_cast<T>(wide);
 }
 
 // Default fallback: a reflectable struct (member reflect() or external
@@ -260,7 +268,7 @@ void reflectValue(Reflector& ref, T& value)
 // so the dispatcher just runs the user's reflect.
 template <typename T>
     requires Reflectable<T> && (!std::is_arithmetic_v<T>) && (!std::is_enum_v<T>)
-void reflectValue(Reflector& ref, T& value)
+constexpr void reflectValue(Reflector& ref, T& value)
 {
     if constexpr (isNamedUserType<T>())
         if (!ref.beginNamedType(TypeId {typeNameOf<T>(), qualifiedNameOf<T>()}))
@@ -285,21 +293,21 @@ namespace Miro
 // `reflectValue(Reflector&, T&)` overload in namespace `Miro` or in `T`'s
 // own namespace, even after <Miro/Miro.h> has been included.
 template <typename T>
-void Property::operator()(T& value)
+constexpr void Property::operator()(T& value)
 {
     using Detail::reflectValue;
-    reflectValue(reflector.atKey(key,
-                                 Detail::childOptionsFor<T>(reflector.options())),
-                 value);
+    reflectValue(
+        reflector.atKey(key, Detail::childOptionsFor<T>(reflector.options())),
+        value);
 }
 
 template <typename T>
-void Element::operator()(T& value)
+constexpr void Element::operator()(T& value)
 {
     using Detail::reflectValue;
-    reflectValue(reflector.atIndex(index,
-                                   Detail::childOptionsFor<T>(reflector.options())),
-                 value);
+    reflectValue(
+        reflector.atIndex(index, Detail::childOptionsFor<T>(reflector.options())),
+        value);
 }
 
 } // namespace Miro

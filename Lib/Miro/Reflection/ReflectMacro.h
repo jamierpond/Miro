@@ -125,13 +125,21 @@
 #define MIRO_REFLECT_API(...)                                                       \
     void reflect(Miro::ApiReflector& __VA_OPT__(r))                                 \
     {                                                                               \
-        __VA_OPT__(                                                                 \
-            using MiroReflectApiSelf = std::remove_cvref_t<decltype(*this)>;)       \
+        __VA_OPT__(using MiroReflectApiSelf =                                       \
+                       std::remove_cvref_t<decltype(*this)>;)                       \
         MIRO_FOR_EACH_WITH(MIRO_REFLECT_API_FIELD, r, __VA_ARGS__)                  \
     }
 
+// The generated reflect() bodies are constexpr so that types whose
+// fields are themselves constexpr-reflectable (primitives, strings,
+// std::vector / std::array / std::optional, enums, nested such types)
+// can be serialized and parsed during constant evaluation — see
+// toJSONString / createFromJSONString. Fields outside that set (e.g.
+// std::map or EA containers) still reflect fine at runtime; only
+// actually invoking the serde at compile time requires the whole
+// field set to be constexpr-friendly.
 #define MIRO_REFLECT(...)                                                           \
-    void reflect(Miro::Reflector& __VA_OPT__(ref))                                  \
+    constexpr void reflect(Miro::Reflector& __VA_OPT__(ref))                        \
     {                                                                               \
         MIRO_FIELDS(ref, __VA_ARGS__)                                               \
     }
@@ -141,8 +149,8 @@
 #define MIRO_REFLECT_EXTERNAL(Type, ...)                                            \
     namespace Miro                                                                  \
     {                                                                               \
-    inline void reflect(Miro::Reflector& __VA_OPT__(ref),                           \
-                        Type& __VA_OPT__(valueToUse))                               \
+    constexpr void reflect(Miro::Reflector& __VA_OPT__(ref),                        \
+                           Type& __VA_OPT__(valueToUse))                            \
     {                                                                               \
         MIRO_FOR_EACH(MIRO_REFLECT_EXTERNAL_FIELD, __VA_ARGS__)                     \
     }                                                                               \
@@ -151,7 +159,7 @@
 #define MIRO_REFLECT_NAMED_FIELD(field, key) ref[key](field);
 
 #define MIRO_REFLECT_MEMBERS(...)                                                   \
-    void reflect(Miro::Reflector& __VA_OPT__(ref))                                  \
+    constexpr void reflect(Miro::Reflector& __VA_OPT__(ref))                        \
     {                                                                               \
         MIRO_FOR_EACH_PAIR(MIRO_REFLECT_NAMED_FIELD, __VA_ARGS__)                   \
     }
@@ -161,8 +169,8 @@
 #define MIRO_REFLECT_EXTERNAL_MEMBERS(Type, ...)                                    \
     namespace Miro                                                                  \
     {                                                                               \
-    inline void reflect(Miro::Reflector& __VA_OPT__(ref),                           \
-                        Type& __VA_OPT__(valueToUse))                               \
+    constexpr void reflect(Miro::Reflector& __VA_OPT__(ref),                        \
+                           Type& __VA_OPT__(valueToUse))                            \
     {                                                                               \
         MIRO_FOR_EACH_PAIR(MIRO_REFLECT_EXTERNAL_NAMED_FIELD, __VA_ARGS__)          \
     }                                                                               \
@@ -190,7 +198,7 @@
             ref,                                                                    \
             field,                                                                  \
             [&](auto& __VA_OPT__(d))                                                \
-            { MIRO_FOR_EACH_PAIR(MIRO_POLY_ALT_PAIR, __VA_ARGS__) });                \
+            { MIRO_FOR_EACH_PAIR(MIRO_POLY_ALT_PAIR, __VA_ARGS__) });               \
     }
 
 #define MIRO_REFLECT_EXTERNAL_POLY(Type, field, ...)                                \
@@ -202,6 +210,6 @@
             ref,                                                                    \
             valueToUse.field,                                                       \
             [&](auto& __VA_OPT__(d))                                                \
-            { MIRO_FOR_EACH_PAIR(MIRO_POLY_ALT_PAIR, __VA_ARGS__) });                \
+            { MIRO_FOR_EACH_PAIR(MIRO_POLY_ALT_PAIR, __VA_ARGS__) });               \
     }                                                                               \
     }

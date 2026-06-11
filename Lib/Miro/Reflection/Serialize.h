@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ConstexprJson.h"
 #include "JsonReflector.h"
 #include "ReflectContainers.h"
 #include "ReflectDispatch.h"
@@ -8,6 +9,7 @@
 
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 namespace Miro
 {
@@ -37,9 +39,21 @@ T createFromJSON(const JSON& json)
     return value;
 }
 
+// toJSONString / fromJSONString / createFromJSONString are usable in
+// constant expressions for types whose reflect() and constructor are
+// constexpr and whose fields are constexpr-reflectable (primitives,
+// std::string, std::vector / std::array / std::optional, enums, and
+// nested such types). MIRO_REFLECT already generates a constexpr
+// reflect(). At compile time the serde bypasses Json::Value (std::map
+// can't run in a constant expression) and goes through the
+// Detail::ConstexprJson mirror, which prints and parses identically;
+// at runtime nothing changes.
 template <typename T>
-std::string toJSONString(const T& value, int indent = 0)
+constexpr std::string toJSONString(const T& value, int indent = 0)
 {
+    if (std::is_constant_evaluated())
+        return Detail::ConstexprJson::toText(value, indent);
+
     return Json::print(toJSON(value), indent);
 }
 
@@ -50,15 +64,23 @@ void logJSON(const T& value, int indent = 4)
 }
 
 template <typename T>
-void fromJSONString(T& value, std::string_view jsonString)
+constexpr void fromJSONString(T& value, std::string_view jsonString)
 {
+    if (std::is_constant_evaluated())
+    {
+        Detail::ConstexprJson::fromText(value, jsonString);
+        return;
+    }
+
     fromJSON(value, Json::parse(jsonString));
 }
 
 template <typename T>
-T createFromJSONString(std::string_view jsonString)
+constexpr T createFromJSONString(std::string_view jsonString)
 {
-    return createFromJSON<T>(Json::parse(jsonString));
+    auto value = T {};
+    fromJSONString(value, jsonString);
+    return value;
 }
 
 template <typename T>

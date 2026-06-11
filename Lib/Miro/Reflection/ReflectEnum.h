@@ -139,7 +139,7 @@ namespace Detail
 
 template <typename T>
     requires std::is_enum_v<T>
-void reflectValue(Reflector& ref, T& value)
+constexpr void reflectValue(Reflector& ref, T& value)
 {
     using Underlying = std::underlying_type_t<T>;
 

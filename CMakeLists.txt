@@ -12,6 +12,17 @@ include(MiroTypeExport)
 option(MIRO_UNITY_BUILD "Enable CMake unity build for the Miro library" OFF)
 option(MIRO_BUILD_TESTS "Build Miro internal tests" OFF)
 
+# Opt-in C++26 static reflection (P2996). When ON, Miro serializes plain
+# aggregates with no reflect() method and no MIRO_REFLECT macro. Requires
+# a P2996-capable toolchain (e.g. the Bloomberg clang-p2996 fork); the
+# flags below are clang-p2996 spellings. Left OFF by default so ordinary
+# C++20 builds on stock compilers are entirely unaffected.
+option(MIRO_ENABLE_REFLECTION "Enable C++26 (P2996) structural reflection" OFF)
+
+if (MIRO_ENABLE_REFLECTION)
+    set(CMAKE_CXX_STANDARD 26)
+endif ()
+
 add_subdirectory(SDKs)
 add_subdirectory(Lib)
 

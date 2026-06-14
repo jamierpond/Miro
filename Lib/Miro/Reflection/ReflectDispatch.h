@@ -14,6 +14,17 @@
 #include <variant>
 #include <vector>
 
+// C++26 static reflection (P2996) unlocks zero-annotation structural
+// reflection: a plain aggregate serializes with no reflect() method and
+// no MIRO_REFLECT macro at all. Gated on the experimental <meta> header
+// (the Bloomberg clang-p2996 fork) so ordinary C++20 builds are wholly
+// unaffected. Building this path also needs -freflection and
+// -fexpansion-statements (for the `template for` member walk below).
+#if __has_include(<experimental/meta>)
+    #include <experimental/meta>
+    #define MIRO_HAS_REFLECTION 1
+#endif
+
 namespace Miro::Detail
 {
 
@@ -129,6 +140,30 @@ struct IsVariant<std::variant<Ts...>> : std::true_type
 {
 };
 
+#ifdef MIRO_HAS_REFLECTION
+// True when T declares no base classes. Structural reflection walks only
+// a type's own non-static data members (nonstatic_data_members_of does
+// not include inherited ones), so a type with bases would silently drop
+// fields — those must supply an explicit reflect() instead.
+template <typename T>
+consteval bool hasNoBases()
+{
+    return std::meta::bases_of(^^T, std::meta::access_context::current())
+        .empty();
+}
+
+// A type Miro can reflect with zero annotation: a plain aggregate (public
+// data, no user-declared constructors, no virtuals, no bases) that has
+// not opted into an explicit reflect() and is not already covered by a
+// container / variant overload. Aggregates are never arithmetic or enum
+// types, so those keep their dedicated paths untouched.
+template <typename T>
+concept StructurallyReflectable =
+    std::is_class_v<T> && std::is_aggregate_v<T> && !Reflectable<T>
+    && !IsArrayLike<T>::value && !IsMapLike<T>::value && !IsVariant<T>::value
+    && hasNoBases<T>();
+#endif
+
 template <typename T>
 constexpr bool isOptional()
 {
@@ -146,7 +181,11 @@ consteval Shape shapeOf()
         return Shape::Map;
     else if constexpr (IsVariant<U>::value
                        || (Reflectable<U> && !std::is_arithmetic_v<U>
-                           && !std::is_enum_v<U>) )
+                           && !std::is_enum_v<U>)
+#ifdef MIRO_HAS_REFLECTION
+                       || StructurallyReflectable<U>
+#endif
+    )
         return Shape::Object;
     else
         return Shape::Primitive;
@@ -271,6 +310,34 @@ void reflectValue(Reflector& ref, T& value)
     else
         reflect(ref, value);
 }
+
+#ifdef MIRO_HAS_REFLECTION
+// Zero-annotation fallback: a plain aggregate with no reflect() method
+// and no MIRO_REFLECT macro. Its non-static data members are walked via
+// C++26 reflection, each member's source identifier becoming the key —
+// so the C++ field name *is* the wire name, impossible to desync. Tried
+// only when nothing else matches (StructurallyReflectable requires
+// !Reflectable), so existing hand-written / macro'd types are unaffected.
+// The slot is committed as Object by the parent's atKey/atIndex (shapeOf
+// classifies StructurallyReflectable types as Object), matching the
+// Reflectable fallback above.
+template <typename T>
+    requires StructurallyReflectable<T>
+void reflectValue(Reflector& ref, T& value)
+{
+    if constexpr (isNamedUserType<T>())
+        if (!ref.beginNamedType(TypeId {typeNameOf<T>(), qualifiedNameOf<T>()}))
+            return;
+
+    template for (constexpr auto member : define_static_array(
+                      nonstatic_data_members_of(
+                          ^^T, std::meta::access_context::current())))
+    {
+        constexpr auto key = std::string_view {identifier_of(member)};
+        ref[key](value.[:member:]);
+    }
+}
+#endif
 
 } // namespace Miro::Detail
 

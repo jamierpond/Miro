@@ -29,6 +29,15 @@ add_library(Miro STATIC
     Miro/TypeScript/TypeScript.cpp)
 target_include_directories(Miro PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_compile_options(Miro PUBLIC $<$<CXX_COMPILER_ID:MSVC>:/Zc:preprocessor>)
+
+# Structural reflection lives entirely in headers (ReflectDispatch.h), so
+# the toolchain flags must propagate to consumers too — hence PUBLIC. The
+# header self-gates on <experimental/meta>; these flags make that header
+# available and enable the `template for` member walk it uses.
+if (MIRO_ENABLE_REFLECTION)
+    target_compile_features(Miro PUBLIC cxx_std_26)
+    target_compile_options(Miro PUBLIC -freflection -fexpansion-statements)
+endif ()
 target_link_libraries(Miro
     PUBLIC ea_data_structures
     PRIVATE miro_warnings)

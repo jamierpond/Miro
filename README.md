@@ -116,7 +116,41 @@ Convenience functions:
 - `Miro::toJSONString(value, indent = 0)` / `Miro::fromJSONString(value, str)`
 - `Miro::createFromJSONString<T>(str)`
 
+### Zero-annotation reflection (C++26 / P2996)
+
+On a P2996-capable toolchain, plain aggregates serialize with **no `reflect()` method and no macro at all**. Build with `-DMIRO_ENABLE_REFLECTION=ON` (requires the [Bloomberg clang-p2996](https://github.com/bloomberg/clang-p2996) fork, which adds `-std=c++26 -freflection -fexpansion-statements`):
+
+```cpp
+struct Address
+{
+    std::string city;
+    int zip = 0;
+};
+
+struct Profile
+{
+    std::string name;
+    int age = 0;
+    Address home;                 // nested aggregates compose
+    std::vector<std::string> tags;
+    std::vector<Address> visited; // and so do containers of them
+};
+
+auto json = Miro::toJSONString(profile);              // just works
+auto back = Miro::createFromJSONString<Profile>(json);
+```
+
+Each non-static data member is walked via C++26 reflection, and **the C++ field name is used verbatim as the key** — rename a field and the wire format renames with it, with no second list to keep in sync. The same single dispatch powers every backend, so the same annotation-free type also flows through `toXML`, the JSON-Schema exporter, and codegen.
+
+This path is **opt-in and additive**:
+
+- It applies only to plain aggregates (public data, no user-declared constructors, no virtuals, no base classes). Types with invariants keep their explicit `reflect()`.
+- A hand-written `reflect()` or any `MIRO_REFLECT*` macro always takes precedence, so existing code is unchanged.
+- When `MIRO_ENABLE_REFLECTION` is off (the default), the feature is fully compiled out and ordinary C++20 builds on stock compilers behave exactly as before. The macros below remain fully supported.
+
 ### Reflection macros
+
+The macros are no longer required for plain structs on a P2996 toolchain (see above), but remain the way to reflect types non-intrusively, remap keys, or run custom logic — and they are the only path on C++20 compilers.
 
 Four macros cover the common cases. Pick based on two axes: does your type support adding a member function (intrusive vs. non-intrusive), and do you want the JSON key to match the C++ identifier or to be an arbitrary string?
 

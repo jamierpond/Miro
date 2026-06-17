@@ -1,13 +1,12 @@
 #pragma once
 
-#include "../JSON/Json.h"
+#include "../JSON/Generic.h"
 #include "ReflectDispatch.h"
 
 #include <algorithm>
-#include <bit>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -17,25 +16,24 @@
 // Compile-time JSON serde backend.
 //
 // Json::Value can't exist in a constant expression (std::map is not
-// constexpr), so this is a constexpr mirror of the whole JSON
-// quartet: a value type, a reflector, a printer and a parser. The
-// public serde entry points (toJSONString / fromJSONString /
-// createFromJSONString in Serialize.h) route here when constant-
-// evaluated and to the Json::Value path at runtime.
-//
-// Object members are kept key-sorted, matching std::map iteration
-// order, so compile-time output is byte-identical to the runtime
-// printer. Number formatting mirrors the runtime printer (integral
-// doubles as integers, otherwise ostringstream's default "%g") and
-// number parsing takes the exact single-multiply path for typical
-// values; pathological doubles may differ from the runtime result in
-// the last digit / ulp.
+// constexpr), so this provides a constexpr mirror of the document
+// model — object members are kept key-sorted, matching std::map
+// iteration order — plus a constexpr port of JsonReflector. The
+// parser and printer are NOT duplicated here: the generic templates
+// in JSON/Generic.h are instantiated with the mirror Value, so the
+// compile-time path runs the same algorithms as the runtime path and
+// produces identical bytes by construction. The public serde entry
+// points (toJSONString / fromJSONString / createFromJSONString in
+// Serialize.h) route here when constant-evaluated.
 
 namespace Miro::Detail::ConstexprJson
 {
 
 struct Member;
 
+// Constexpr mirror of Json::Value: same read accessors and scalar
+// constructors (so generic code compiles identically against both),
+// with public alternative fields instead of a variant.
 struct Value
 {
     enum class Kind
@@ -48,8 +46,27 @@ struct Value
         Object
     };
 
+    // Defined below, after Member is complete: a user-provided
+    // constructor odr-uses the vector<Member> member's destructor for
+    // cleanup, which needs the complete type.
+    Value() = default;
+    constexpr Value(std::nullptr_t);
+    constexpr Value(bool valueToUse);
+    constexpr Value(double valueToUse);
+    constexpr Value(std::string valueToUse);
+
+    constexpr bool isNull() const { return kind == Kind::Null; }
+    constexpr bool isBool() const { return kind == Kind::Bool; }
+    constexpr bool isNumber() const { return kind == Kind::Number; }
+    constexpr bool isString() const { return kind == Kind::String; }
     constexpr bool isArray() const { return kind == Kind::Array; }
     constexpr bool isObject() const { return kind == Kind::Object; }
+
+    constexpr bool asBool() const { return boolValue; }
+    constexpr double asNumber() const { return numberValue; }
+    constexpr const std::string& asString() const { return stringValue; }
+    constexpr const std::vector<Value>& asArray() const { return arrayValue; }
+    constexpr const std::vector<Member>& asObject() const { return objectValue; }
 
     Kind kind = Kind::Null;
     bool boolValue = false;
@@ -65,13 +82,36 @@ struct Member
     Value value;
 };
 
+constexpr Value::Value(std::nullptr_t) {}
+
+constexpr Value::Value(bool valueToUse)
+    : kind(Kind::Bool)
+    , boolValue(valueToUse)
+{
+}
+
+constexpr Value::Value(double valueToUse)
+    : kind(Kind::Number)
+    , numberValue(valueToUse)
+{
+}
+
+constexpr Value::Value(std::string valueToUse)
+    : kind(Kind::String)
+    , stringValue(std::move(valueToUse))
+{
+}
+
+using Array = std::vector<Value>;
+using Object = std::vector<Member>;
+
 constexpr void resetTo(Value& slot, Value::Kind kindToUse)
 {
     slot = Value {};
     slot.kind = kindToUse;
 }
 
-constexpr Value* find(std::vector<Member>& members, std::string_view key)
+constexpr Value* find(Object& members, std::string_view key)
 {
     for (auto& member: members)
         if (member.key == key)
@@ -82,7 +122,7 @@ constexpr Value* find(std::vector<Member>& members, std::string_view key)
 
 // Sorted insert returning the slot for `key` — the existing one when
 // present (std::map::operator[] semantics for the save path).
-constexpr Value& findOrInsert(std::vector<Member>& members, std::string_view key)
+constexpr Value& findOrInsert(Object& members, std::string_view key)
 {
     auto index = std::size_t {0};
 
@@ -96,11 +136,34 @@ constexpr Value& findOrInsert(std::vector<Member>& members, std::string_view key
     return members[index].value;
 }
 
-// Sorted insert where the first occurrence wins — std::map::emplace
-// semantics, used by the parser for duplicate keys.
-constexpr void
-    insertIfAbsent(std::vector<Member>& members, std::string key, Value value)
+// Construction seams used by the generic parsers (see
+// Detail/DocumentOps.h for the runtime Json::Value overloads).
+// Insertion is sorted and first-occurrence-wins, matching
+// std::map::emplace iteration order and semantics.
+
+constexpr void setEmptyArray(Value& value)
 {
+    resetTo(value, Value::Kind::Array);
+}
+
+constexpr void setEmptyObject(Value& value)
+{
+    resetTo(value, Value::Kind::Object);
+}
+
+constexpr void reserveArray(Value& value, std::size_t count)
+{
+    value.arrayValue.reserve(count);
+}
+
+constexpr void appendElement(Value& value, Value element)
+{
+    value.arrayValue.push_back(std::move(element));
+}
+
+constexpr void insertMember(Value& value, std::string key, Value member)
+{
+    auto& members = value.objectValue;
     auto index = std::size_t {0};
 
     while (index < members.size() && members[index].key < key)
@@ -110,7 +173,7 @@ constexpr void
         return;
 
     members.insert(members.begin() + static_cast<std::ptrdiff_t>(index),
-                   Member {std::move(key), std::move(value)});
+                   Member {std::move(key), std::move(member)});
 }
 
 // Sort parsed members by key (matching std::map iteration order, so the
@@ -379,329 +442,16 @@ private:
 
 using ValueReflector = BasicValueReflector<Value>;
 
-// --- Printer (mirrors JSON/Printer.cpp byte for byte) ---
+// --- Document text via the shared generic JSON parser / printer ---
 
-constexpr void
-    printTo(std::string& output, const Value& value, int indent, int depth);
-
-constexpr void appendInteger(std::string& output, long long valueToUse)
+constexpr Value parse(std::string_view inputToUse)
 {
-    if (valueToUse < 0)
-    {
-        output += '-';
-        valueToUse = -valueToUse;
-    }
-
-    char digits[24] {};
-    auto count = 0;
-
-    do
-    {
-        digits[count++] = static_cast<char>('0' + valueToUse % 10);
-        valueToUse /= 10;
-    } while (valueToUse != 0);
-
-    while (count > 0)
-        output += digits[--count];
-}
-
-constexpr void printString(std::string& output, const std::string& str)
-{
-    constexpr auto hexDigits = std::string_view {"0123456789abcdef"};
-
-    output += '"';
-
-    for (auto c: str)
-    {
-        switch (c)
-        {
-            case '"':
-                output += "\\\"";
-                break;
-            case '\\':
-                output += "\\\\";
-                break;
-            case '\b':
-                output += "\\b";
-                break;
-            case '\f':
-                output += "\\f";
-                break;
-            case '\n':
-                output += "\\n";
-                break;
-            case '\r':
-                output += "\\r";
-                break;
-            case '\t':
-                output += "\\t";
-                break;
-            default:
-                if (static_cast<unsigned char>(c) < 0x20)
-                {
-                    auto code = static_cast<unsigned>(static_cast<unsigned char>(c));
-                    output += "\\u00";
-                    output += hexDigits[(code >> 4) & 0xF];
-                    output += hexDigits[code & 0xF];
-                }
-                else
-                {
-                    output += c;
-                }
-        }
-    }
-
-    output += '"';
-}
-
-// Emulates ostringstream's default double rendering (printf "%g",
-// six significant digits) for the non-integral branch of the runtime
-// printer. Digit extraction scales through binary floating point, so
-// values sitting exactly on a rounding boundary can come out one
-// final digit away from printf's result.
-constexpr void printGeneral(std::string& output, double valueToUse)
-{
-    if (valueToUse != valueToUse)
-    {
-        if (std::bit_cast<std::uint64_t>(valueToUse) >> 63)
-            output += '-';
-
-        output += "nan";
-        return;
-    }
-
-    if (valueToUse < 0)
-    {
-        output += '-';
-        valueToUse = -valueToUse;
-    }
-
-    if (valueToUse == std::numeric_limits<double>::infinity())
-    {
-        output += "inf";
-        return;
-    }
-
-    auto exponent = 0;
-
-    while (valueToUse >= 10.0)
-    {
-        valueToUse /= 10.0;
-        ++exponent;
-    }
-
-    while (valueToUse < 1.0)
-    {
-        valueToUse *= 10.0;
-        --exponent;
-    }
-
-    auto scaled = valueToUse * 100000.0;
-    auto digits = static_cast<long long>(scaled);
-
-    if (scaled - static_cast<double>(digits) >= 0.5)
-        ++digits;
-
-    if (digits >= 1000000)
-    {
-        digits /= 10;
-        ++exponent;
-    }
-
-    char digitChars[6] {};
-
-    for (auto i = 5; i >= 0; --i)
-    {
-        digitChars[i] = static_cast<char>('0' + digits % 10);
-        digits /= 10;
-    }
-
-    if (exponent < -4 || exponent >= 6)
-    {
-        output += digitChars[0];
-
-        auto fracEnd = 6;
-
-        while (fracEnd > 1 && digitChars[fracEnd - 1] == '0')
-            --fracEnd;
-
-        if (fracEnd > 1)
-        {
-            output += '.';
-
-            for (auto i = 1; i < fracEnd; ++i)
-                output += digitChars[i];
-        }
-
-        output += 'e';
-        output += exponent < 0 ? '-' : '+';
-
-        auto magnitude = exponent < 0 ? -exponent : exponent;
-
-        if (magnitude < 10)
-            output += '0';
-
-        appendInteger(output, magnitude);
-        return;
-    }
-
-    if (exponent >= 0)
-    {
-        for (auto i = 0; i <= exponent; ++i)
-            output += digitChars[i];
-
-        auto fracEnd = 6;
-
-        while (fracEnd > exponent + 1 && digitChars[fracEnd - 1] == '0')
-            --fracEnd;
-
-        if (fracEnd > exponent + 1)
-        {
-            output += '.';
-
-            for (auto i = exponent + 1; i < fracEnd; ++i)
-                output += digitChars[i];
-        }
-
-        return;
-    }
-
-    output += "0.";
-
-    for (auto i = 0; i < -exponent - 1; ++i)
-        output += '0';
-
-    auto fracEnd = 6;
-
-    while (fracEnd > 1 && digitChars[fracEnd - 1] == '0')
-        --fracEnd;
-
-    for (auto i = 0; i < fracEnd; ++i)
-        output += digitChars[i];
-}
-
-constexpr void printNumber(std::string& output, double number)
-{
-    auto integral = number == number && number < 1e15 && number > -1e15
-                    && static_cast<double>(static_cast<long long>(number)) == number;
-
-    if (integral)
-        appendInteger(output, static_cast<long long>(number));
-    else
-        printGeneral(output, number);
-}
-
-constexpr void writeIndent(std::string& output, int indent, int depth)
-{
-    output += '\n';
-    output.append(static_cast<std::size_t>(indent * depth), ' ');
-}
-
-constexpr void printArray(std::string& output,
-                          const std::vector<Value>& array,
-                          int indent,
-                          int depth)
-{
-    output += '[';
-
-    if (array.empty())
-    {
-        output += ']';
-        return;
-    }
-
-    auto first = true;
-
-    for (const auto& element: array)
-    {
-        if (!first)
-            output += ',';
-
-        first = false;
-
-        if (indent > 0)
-            writeIndent(output, indent, depth + 1);
-
-        printTo(output, element, indent, depth + 1);
-    }
-
-    if (indent > 0)
-        writeIndent(output, indent, depth);
-
-    output += ']';
-}
-
-constexpr void printObject(std::string& output,
-                           const std::vector<Member>& object,
-                           int indent,
-                           int depth)
-{
-    output += '{';
-
-    if (object.empty())
-    {
-        output += '}';
-        return;
-    }
-
-    auto first = true;
-
-    for (const auto& [key, value]: object)
-    {
-        if (!first)
-            output += ',';
-
-        first = false;
-
-        if (indent > 0)
-            writeIndent(output, indent, depth + 1);
-
-        printString(output, key);
-        output += ':';
-
-        if (indent > 0)
-            output += ' ';
-
-        printTo(output, value, indent, depth + 1);
-    }
-
-    if (indent > 0)
-        writeIndent(output, indent, depth);
-
-    output += '}';
-}
-
-constexpr void
-    printTo(std::string& output, const Value& value, int indent, int depth)
-{
-    switch (value.kind)
-    {
-        case Value::Kind::Null:
-            output += "null";
-            break;
-        case Value::Kind::Bool:
-            output += value.boolValue ? "true" : "false";
-            break;
-        case Value::Kind::Number:
-            printNumber(output, value.numberValue);
-            break;
-        case Value::Kind::String:
-            printString(output, value.stringValue);
-            break;
-        case Value::Kind::Array:
-            printArray(output, value.arrayValue, indent, depth);
-            break;
-        case Value::Kind::Object:
-            printObject(output, value.objectValue, indent, depth);
-            break;
-    }
+    return Json::Generic::parse<Value>(inputToUse);
 }
 
 constexpr std::string print(const Value& valueToUse, int indentToUse)
 {
-    auto result = std::string {};
-    printTo(result, valueToUse, indentToUse, 0);
-    return result;
+    return Json::Generic::print(valueToUse, indentToUse);
 }
 
 // --- Parser (mirrors JSON/Parser.cpp) ---
@@ -1208,23 +958,9 @@ private:
     std::size_t pos = 0;
 };
 
-constexpr Value parse(std::string_view inputToUse)
-{
-    auto parser = Parser {inputToUse};
-    auto result = parser.parseValue();
-    parser.skipWhitespaceAndComments();
-
-    if (!parser.atEnd())
-        parser.error("unexpected trailing content");
-
-    return result;
-}
-
-// --- Serde entry points (called from Serialize.h during constant
-// evaluation) ---
 
 template <typename T>
-constexpr std::string toText(const T& value, int indent)
+constexpr Value reflectToValue(const T& value)
 {
     auto root = Value {};
     auto ref = ValueReflector {root, topLevelOptions<T>(Mode::Save)};
@@ -1232,17 +968,31 @@ constexpr std::string toText(const T& value, int indent)
     using Detail::reflectValue;
     reflectValue(ref, const_cast<T&>(value));
 
-    return print(root, indent);
+    return root;
+}
+
+template <typename T>
+constexpr void loadFromValue(T& value, Value root)
+{
+    auto ref = ValueReflector {root, topLevelOptions<T>(Mode::Load)};
+
+    using Detail::reflectValue;
+    reflectValue(ref, value);
+}
+
+// --- Entry points (called from Serialize.h during constant
+// evaluation) ---
+
+template <typename T>
+constexpr std::string toText(const T& value, int indent)
+{
+    return Json::Generic::print(reflectToValue(value), indent);
 }
 
 template <typename T>
 constexpr void fromText(T& value, std::string_view text)
 {
-    auto root = parse(text);
-    auto ref = ValueReflector {root, topLevelOptions<T>(Mode::Load)};
-
-    using Detail::reflectValue;
-    reflectValue(ref, value);
+    loadFromValue(value, parse(text));
 }
 
 } // namespace Miro::Detail::ConstexprJson

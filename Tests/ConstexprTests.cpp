@@ -2,7 +2,10 @@
 #include <NanoTest/NanoTest.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -36,7 +39,6 @@ struct Track
 
     MIRO_REFLECT(id, name, gain)
 };
-
 
 struct Session
 {
@@ -292,35 +294,37 @@ auto runtimeRoundTripOfSample =
           == makeSession());
 };
 
-// The constexpr printer/parser are also callable at runtime — sweep
-// them against the runtime Json printer/parser for byte and bit
-// parity across representative numbers.
+// The structural printers and parsers are shared templates now, so
+// runtime/compile-time divergence can only come from the number
+// emulations in Detail/ScalarText.h — sweep those directly against
+// the runtime formatting and strtod.
 auto numberFormattingParity =
-    test("Constexpr serde: number formatting matches runtime printer") = []
+    test("Constexpr serde: emulated number formatting matches runtime") = []
 {
+    constexpr auto infinity = std::numeric_limits<double>::infinity();
+    constexpr auto nan = std::numeric_limits<double>::quiet_NaN();
+
     auto values = std::vector<double> {
-        0.0,        -0.0,   1.0,     -1.0,  42.0,   -17.0,     1e14,
-        -1e15,      1e15,   3.14,    -2.5,  0.5,    117.5,     1e-9,
-        6.25e-5,    0.0001, 0.00001, 0.1,   0.2,    1.0 / 3.0, 1234567.5,
-        9.999999e8, 2.5e-3, 1e100,   1e308, 5e-324, 123.456};
+        0.0,     -0.0,   1.0,     -1.0,      42.0,      -17.0,      1e14,    -1e15,
+        1e15,    3.14,   -2.5,    0.5,       117.5,     1e-9,       6.25e-5, 0.0001,
+        0.00001, 0.1,    0.2,     1.0 / 3.0, 1234567.5, 9.999999e8, 2.5e-3,  1e100,
+        1e308,   5e-324, 123.456, infinity,  -infinity, nan};
 
     for (auto value: values)
     {
-        auto mirror = Miro::Detail::ConstexprJson::Value {};
-        mirror.kind = Miro::Detail::ConstexprJson::Value::Kind::Number;
-        mirror.numberValue = value;
-
-        check(Miro::Detail::ConstexprJson::print(mirror, 0)
-              == Miro::Json::print(Miro::JSON {value}, 0));
+        auto emulated = std::string {};
+        Miro::Detail::printNumberEmulated(emulated, value);
+        check(emulated == Miro::Json::print(Miro::JSON {value}, 0));
     }
 };
 
 auto numberParsingParity =
-    test("Constexpr serde: number parsing matches runtime parser") = []
+    test("Constexpr serde: emulated number parsing matches strtod") = []
 {
-    // All within the exact single-multiply fast path (mantissa <= 19
-    // digits, net power of ten within ±22), where the constexpr
-    // parser is bit-identical to strtod.
+    // The first rows sit in the exact single-multiply fast path
+    // (mantissa <= 19 digits, net power of ten within ±22), where the
+    // emulation is bit-identical to strtod; the rest exercise the
+    // partial-consumption, hex and inf/nan forms.
     auto inputs = std::vector<std::string> {"0",
                                             "-0",
                                             "42",
@@ -331,15 +335,44 @@ auto numberParsingParity =
                                             "117.5",
                                             "1e-9",
                                             "0.000125",
+                                            "0.1",
+                                            "1.25e+15",
                                             "9007199254740993",
                                             "9999999999999999999",
-                                            "1.25e+15",
-                                            "0.1"};
+                                            "5.",
+                                            ".5",
+                                            "1.e3",
+                                            "1e",
+                                            "0x1A",
+                                            "-0x10",
+                                            "0x1.8p3",
+                                            "0x1p",
+                                            "0x",
+                                            "0x.8",
+                                            "-inf",
+                                            "+INFINITY",
+                                            "+nan",
+                                            "16:9",
+                                            "1_000"};
 
     for (auto& text: inputs)
     {
-        auto parsed = Miro::Detail::ConstexprJson::parse(text);
-        check(parsed.numberValue == Miro::Json::parse(text).asNumber());
+        auto emulated = 0.0;
+        auto consumed = Miro::Detail::strtodConsumed(text, emulated);
+
+        char* numEnd = nullptr;
+        auto expected = std::strtod(text.c_str(), &numEnd);
+        auto expectedConsumed = static_cast<std::size_t>(numEnd - text.c_str());
+
+        check(consumed == expectedConsumed);
+
+        if (consumed == 0)
+            continue;
+
+        if (expected != expected)
+            check(emulated != emulated);
+        else
+            check(emulated == expected);
     }
 };
 

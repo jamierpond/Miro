@@ -3,6 +3,7 @@
 #include "../JSON/Json.h"
 #include "ReflectDispatch.h"
 
+#include <algorithm>
 #include <bit>
 #include <concepts>
 #include <cstdint>
@@ -110,6 +111,47 @@ constexpr void
 
     members.insert(members.begin() + static_cast<std::ptrdiff_t>(index),
                    Member {std::move(key), std::move(value)});
+}
+
+// Sort parsed members by key (matching std::map iteration order, so the
+// printer is byte-identical to the runtime Json::Value path) and drop
+// later duplicates, mirroring std::map::emplace's first-occurrence-wins.
+//
+// The parser appends members in document order and calls this once per
+// object — O(n log n). It replaces a per-member sorted insert that was
+// O(n^2): each insert shifted every later Member (a string + two
+// vectors) down one slot, so a 50k-entry vocab.json move-constructed
+// ~1.3 billion of them in the constexpr interpreter — minutes of
+// compile time. std::sort is constexpr in C++20; std::stable_sort is
+// not, so the comparator breaks key ties by original index to keep the
+// first occurrence.
+constexpr void sortObjectMembers(std::vector<Member>& members)
+{
+    const auto count = members.size();
+
+    auto order = std::vector<std::size_t>(count);
+    for (auto i = std::size_t {0}; i < count; ++i)
+        order[i] = i;
+
+    std::sort(order.begin(),
+              order.end(),
+              [&](std::size_t a, std::size_t b)
+              {
+                  if (members[a].key != members[b].key)
+                      return members[a].key < members[b].key;
+                  return a < b;
+              });
+
+    auto sorted = std::vector<Member> {};
+    sorted.reserve(count);
+    for (const auto index: order)
+    {
+        if (!sorted.empty() && sorted.back().key == members[index].key)
+            continue;
+        sorted.push_back(std::move(members[index]));
+    }
+
+    members = std::move(sorted);
 }
 
 // --- Reflector ---
@@ -1142,9 +1184,15 @@ private:
         }
 
         expect('}');
+        sortObjectMembers(result.objectValue);
         return result;
     }
 
+    // Append in document order — O(1) amortized. The object is sorted and
+    // deduplicated once in parseObject via sortObjectMembers; doing the
+    // sorted insert here instead was O(n^2) and made large objects (a
+    // 50k-entry vocab.json) take many minutes to parse in a constant
+    // evaluation.
     constexpr void parseMemberInto(std::vector<Member>& members)
     {
         skipWhitespaceAndComments();
@@ -1152,7 +1200,7 @@ private:
         skipWhitespaceAndComments();
         expect(':');
         auto value = parseValue();
-        insertIfAbsent(members, std::move(key), std::move(value));
+        members.push_back(Member {std::move(key), std::move(value)});
         skipWhitespaceAndComments();
     }
 

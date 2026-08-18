@@ -6,6 +6,8 @@ nano_add_executable(MiroTests SOURCES
         JsonTests.cpp
         XmlTests.cpp
         ReflectorTests.cpp
+        BinaryReflectorTests.cpp
+        BinaryBenchmarkTests.cpp
         XmlReflectorTests.cpp
         CommandTableTests.cpp
         CommandExportTests.cpp
@@ -22,6 +24,7 @@ nano_add_executable(MiroTests SOURCES
         PolymorphicTests.cpp
         UserPrimitiveTests.cpp
         CustomOptionsTests.cpp
+        PublicHeaders/BinaryHeaderTests.cpp
         PublicHeaders/JsonHeaderTests.cpp
         PublicHeaders/ReflectHeaderTests.cpp
         PublicHeaders/XmlHeaderTests.cpp

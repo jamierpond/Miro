@@ -4,6 +4,7 @@ find_package(ResEmbed REQUIRED)
 set(CMAKE_FOLDER Miro)
 
 add_library(Miro STATIC
+    Miro/Binary/Binary.cpp
     Miro/Bridge/BindReflector.cpp
     Miro/Bridge/Bridge.cpp
     Miro/CommandExport/CommandExport.cpp
@@ -18,6 +19,7 @@ add_library(Miro STATIC
     Miro/XML/Parser.cpp
     Miro/XML/Printer.cpp
     Miro/Reflection/Any.cpp
+    Miro/Reflection/BinaryReflector.cpp
     Miro/Reflection/CommandTable.cpp
     Miro/Reflection/JsonReflector.cpp
     Miro/Reflection/XmlReflector.cpp

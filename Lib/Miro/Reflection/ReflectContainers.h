@@ -3,15 +3,26 @@
 #include "ReflectDispatch.h"
 
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace Miro::Detail
 {
+
+// Element types eligible for the bulk visitPacked() fast path (see
+// PackedArrayRef in Reflector.h). Deliberately the exact fixed-width
+// set the wire formats know how to pack — enums and odd integer
+// widths keep the per-element walk.
+template <typename T>
+concept PackableElement =
+    std::same_as<T, std::int32_t> || std::same_as<T, std::int64_t>
+    || std::same_as<T, float> || std::same_as<T, double>;
 
 template <typename T>
 void reflectValue(Reflector& ref, std::vector<T>& value)
@@ -24,17 +35,25 @@ void reflectValue(Reflector& ref, std::vector<T>& value)
         {
             auto inner = T {};
             reflectValue(ref.atIndex(0, childOpts), inner);
+            return;
         }
-        else
-        {
-            ref.resizeArray(value.size());
-            for (std::size_t i = 0; i < value.size(); ++i)
-                reflectValue(ref.atIndex(i, childOpts), value[i]);
-        }
+
+        if constexpr (PackableElement<T>)
+            if (ref.visitPacked(PackedArrayRef {std::span<T> {value}}))
+                return;
+
+        ref.resizeArray(value.size());
+        for (std::size_t i = 0; i < value.size(); ++i)
+            reflectValue(ref.atIndex(i, childOpts), value[i]);
     }
     else
     {
         value.resize(ref.arraySize());
+
+        if constexpr (PackableElement<T>)
+            if (ref.visitPacked(PackedArrayRef {std::span<T> {value}}))
+                return;
+
         for (std::size_t i = 0; i < value.size(); ++i)
             reflectValue(ref.atIndex(i, childOpts), value[i]);
     }
@@ -52,18 +71,26 @@ void reflectValue(Reflector& ref, std::array<T, N>& value)
             ref.setArrayBounds(N, N);
             auto inner = T {};
             reflectValue(ref.atIndex(0, childOpts), inner);
+            return;
         }
-        else
-        {
-            ref.resizeArray(N);
-            for (std::size_t i = 0; i < N; ++i)
-                reflectValue(ref.atIndex(i, childOpts), value[i]);
-        }
+
+        if constexpr (PackableElement<T>)
+            if (ref.visitPacked(PackedArrayRef {std::span<T> {value}}))
+                return;
+
+        ref.resizeArray(N);
+        for (std::size_t i = 0; i < N; ++i)
+            reflectValue(ref.atIndex(i, childOpts), value[i]);
     }
     else
     {
         auto size = ref.arraySize();
         auto count = size < N ? size : N;
+
+        if constexpr (PackableElement<T>)
+            if (ref.visitPacked(PackedArrayRef {std::span<T> {value.data(), count}}))
+                return;
+
         for (std::size_t i = 0; i < count; ++i)
             reflectValue(ref.atIndex(i, childOpts), value[i]);
     }

@@ -210,4 +210,12 @@ void reflectValue(Reflector& ref, std::variant<Ts...>& value)
         ref, value, [](auto& d) { (d.template alt<Ts>(typeNameOf<Ts>()), ...); });
 }
 
+// EA::Variant derives from std::variant — delegate to the std::variant
+// overload through the base so the tag rules live in exactly one place.
+template <typename... Ts>
+void reflectValue(Reflector& ref, EA::Variant<Ts...>& value)
+{
+    reflectValue(ref, static_cast<std::variant<Ts...>&>(value));
+}
+
 } // namespace Miro::Detail

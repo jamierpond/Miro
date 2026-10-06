@@ -2,6 +2,8 @@
 
 #include "../Containers.h"
 
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -24,5 +26,11 @@ std::string
 std::string trimAsciiWhitespace(std::string_view input);
 
 std::string makeIndent(int width, int depth);
+
+// Parses the whole of `text` as a decimal integer: no sign slop, no
+// trailing characters. Formats with no number kind hand integers over
+// as text (an XML attribute is always a string), so an integer-format
+// enum or an integral union tag still has to recognise "2".
+std::optional<std::int64_t> parseWholeInteger(std::string_view text);
 
 } // namespace Miro::Detail

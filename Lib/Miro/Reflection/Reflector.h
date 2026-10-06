@@ -43,7 +43,15 @@ enum class Shape
     Primitive,
     Object,
     Array,
-    Map
+    Map,
+
+    // A slot whose structure is decided at runtime by the value being
+    // reflected rather than by its C++ type — a raw Miro::Json::Value
+    // (or Json::Any) field, which can hold any of the kinds above.
+    // Reflectors that commit a shape eagerly must pick something that
+    // survives being overwritten by whatever the value turns out to be;
+    // see JsonReflector::commitShape.
+    Raw
 };
 
 enum class ValueKind
@@ -76,17 +84,36 @@ struct CustomOptions
 // of the base, so most queries (mode, shape, schema, nullable) are
 // non-virtual reads. When a parent spawns a child via atKey/atIndex,
 // the dispatcher constructs the child's Options from the parent's —
-// mode, schema and custom propagate; shape and nullable are set per-child
-// based on the value type being reflected.
+// mode, schema and custom propagate; shape, nullable and omittable are
+// set per-child based on the value type being reflected.
 struct Options
 {
     Mode mode = Mode::Save;
     Shape shape = Shape::Primitive;
     bool nullable = false;
+
+    // Set for the child slot of an Omittable<T>: this child may decline
+    // to exist at all, so a saving parent must not create the key until
+    // the child calls markPresent(). Per-child like `shape` — it never
+    // propagates further down. A reflector that doesn't implement
+    // staging simply writes the key as it always did.
+    bool omittable = false;
+
     bool schema = false;
 
     // Propagated parent -> child unchanged (see CustomOptions).
     CustomOptions custom {};
+};
+
+// The discriminator value of one alternative of an internally tagged
+// union, in the format-neutral spelling schema walkers need. `text` is
+// the literal ("2", "primary"); `isString` says whether it is quoted on
+// the wire. Enum tags follow the normal enum path, so a named
+// enumerator arrives here as its name with `isString` set.
+struct TagLiteral
+{
+    std::string text;
+    bool isString = false;
 };
 
 // Identity of a named C++ type announced through reflection. `shortName`
@@ -99,6 +126,16 @@ struct TypeId
 {
     std::string_view shortName;
     std::string_view qualifiedName;
+};
+
+// One enumerator of an integer-valued enum (see Miro::EnumFormat): the
+// C++ spelling plus the number that actually travels on the wire.
+// Name-valued enums announce names only, so they use a plain
+// Vector<std::string_view> instead.
+struct EnumEntry
+{
+    std::string_view name;
+    std::int64_t value = 0;
 };
 
 // First-class primitive handle. Constructs implicitly from any built-in
@@ -175,6 +212,7 @@ public:
     bool isLoading() const { return opts.mode == Mode::Load; }
     bool isSchema() const { return opts.schema; }
     bool isNullable() const { return opts.nullable; }
+    bool isOmittable() const { return opts.omittable; }
 
     // Per-slot operations that depend on the concrete reflector kind.
     virtual void visit(PrimitiveRef ref) = 0;
@@ -183,6 +221,20 @@ public:
 
     // Bulk fast path for contiguous numeric arrays (see PackedArrayRef).
     virtual bool visitPacked(PackedArrayRef /*ref*/) { return false; }
+
+    // Refines ValueKind::Number for a format that stores an exact
+    // integer apart from a double, the way the JSON layer does. Only a
+    // Shape::Raw walk has to ask — a typed field already knows which C++
+    // type it is reading into — so a format with a single numeric kind
+    // keeps the default and its raw numbers stay doubles.
+    virtual bool isIntegerNumber() const { return false; }
+
+    // Called by the Omittable dispatcher on a save, for an engaged value
+    // only, before the inner T is reflected. A reflector that staged
+    // this slot (because Options::omittable was set) commits it to the
+    // parent here; one that didn't ignores the call. Never calling it is
+    // exactly how "this key is absent" is expressed.
+    virtual void markPresent();
 
     // Called by the dispatch right before invoking a reflectable type's
     // own reflect() body. `id` carries both the short and qualified C++
@@ -203,6 +255,14 @@ public:
         auto placeholder = std::string {"enum"};
         visit(placeholder);
     }
+
+    // Sibling of visitEnum for enums that go on the wire as their
+    // integer value (`Miro::EnumFormat<E>::integer`). Entries carry the
+    // enumerator names alongside those numbers so a renderer can emit a
+    // numeric enum rather than throwing the names away. The default
+    // reports the slot as a plain int64 — the shape the data really
+    // has for a reflector that doesn't model enums at all.
+    virtual void visitIntegerEnum(TypeId id, const Vector<EnumEntry>& entries);
 
     // Spawn a child reflector for a sub-slot. The returned reference is
     // owned by this reflector and remains valid only until the next
@@ -233,6 +293,19 @@ public:
     // we surface the misuse immediately. `context` identifies the call
     // site for the error message.
     virtual void requirePolymorphicSupport(std::string_view context);
+
+    // Schema-mode hook for internally tagged unions (reflectTagged).
+    // Data walkers serialize only the alternative that is actually
+    // active, so they never call this; a schema walker needs every arm,
+    // so the dispatcher announces each registered alternative here and
+    // reflects its body into the returned child slot. `tagKey` is the
+    // discriminator's field name and `tag` this arm's literal value.
+    // The default throws for the same reason requirePolymorphicSupport
+    // does — a reflector that can't describe a union should say so
+    // rather than emit a partial shape.
+    virtual Reflector& beginTaggedAlternative(std::string_view tagKey,
+                                              const TagLiteral& tag,
+                                              Options childOpts);
 
 protected:
     Options opts;

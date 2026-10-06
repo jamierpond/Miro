@@ -1,7 +1,9 @@
 #include "Json.h"
+#include "Number.h"
 
+#include <charconv>
 #include <cmath>
-#include <sstream>
+#include <cstdio>
 #include <iostream>
 
 namespace Miro::Json
@@ -59,21 +61,39 @@ void printString(std::string& output, const std::string& str)
     output += '"';
 }
 
-void printNumber(std::string& output, double number)
+template <typename T>
+void printWithToChars(std::string& output, T number)
 {
-    if (std::isfinite(number) && number == std::floor(number)
-        && std::abs(number) < 1e15)
+    auto buffer = Miro::Array<char, 48> {};
+    auto* first = buffer.data();
+    auto [ptr, ec] = std::to_chars(first, first + buffer.size(), number);
+    output.append(first, ptr);
+}
+
+void printInteger(std::string& output, std::int64_t number)
+{
+    printWithToChars(output, number);
+}
+
+// Every finite number round-trips. Infinity and NaN have no JSON
+// spelling at all, so they go out as null.
+void printDouble(std::string& output, double number)
+{
+    if (!std::isfinite(number))
     {
-        auto stream = std::ostringstream {};
-        stream << static_cast<long long>(number);
-        output += stream.str();
+        output += "null";
+        return;
     }
-    else
+
+    constexpr auto limit = 9223372036854775808.0;
+
+    if (number == std::trunc(number) && number >= -limit && number < limit)
     {
-        auto stream = std::ostringstream {};
-        stream << number;
-        output += stream.str();
+        printInteger(output, static_cast<std::int64_t>(number));
+        return;
     }
+
+    Detail::appendShortestDouble(output, number);
 }
 
 void writeIndent(std::string& output, int indent, int depth)
@@ -160,9 +180,13 @@ void printTo(std::string& output, const Value& value, int indent, int depth)
     {
         output += value.asBool() ? "true" : "false";
     }
+    else if (value.isInteger())
+    {
+        printInteger(output, value.asInteger());
+    }
     else if (value.isNumber())
     {
-        printNumber(output, value.asNumber());
+        printDouble(output, value.asNumber());
     }
     else if (value.isString())
     {

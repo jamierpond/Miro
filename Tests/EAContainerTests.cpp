@@ -215,3 +215,67 @@ auto userVectorSubclassRoundtrip =
     check(loaded.numbers[1] == 20);
     check(loaded.numbers[2] == 30);
 };
+
+namespace
+{
+struct Beat
+{
+    double position = 0.0;
+
+    MIRO_REFLECT(position)
+};
+
+struct WithEAVariant
+{
+    EA::Variant<Inner, Beat> value;
+
+    MIRO_REFLECT(value)
+};
+} // namespace
+
+auto eaVariantRoundtripFirst =
+    test("EA::Variant<Inner, Beat> round-trips the first alternative") = []
+{
+    auto original = WithEAVariant {};
+    original.value = Inner {3, "x"};
+
+    auto json = toJSONString(original);
+    check(json == R"({"value":{"Inner":{"count":3,"label":"x"}}})");
+
+    auto loaded = createFromJSONString<WithEAVariant>(json);
+    auto* inner = loaded.value.get<Inner>();
+
+    check(inner != nullptr);
+    check(inner->count == 3);
+    check(inner->label == "x");
+};
+
+auto eaVariantRoundtripSecond =
+    test("EA::Variant<Inner, Beat> round-trips the second alternative") = []
+{
+    auto original = WithEAVariant {};
+    original.value = Beat {1.5};
+
+    auto json = toJSONString(original);
+    check(json == R"({"value":{"Beat":{"position":1.5}}})");
+
+    auto loaded = createFromJSONString<WithEAVariant>(json);
+    auto* beat = loaded.value.get<Beat>();
+
+    check(beat != nullptr);
+    check(beat->position == 1.5);
+};
+
+auto eaVariantInVectorRoundtrip = test("Vector<EA::Variant> round-trips") = []
+{
+    auto original = Vector<EA::Variant<Inner, Beat>> {};
+    original.add(Beat {0.25});
+    original.add(Inner {7, "seven"});
+
+    auto loaded = createFromJSON<Vector<EA::Variant<Inner, Beat>>>(toJSON(original));
+
+    check(loaded.size() == 2);
+    check(loaded[0].holds<Beat>());
+    check(loaded[1].holds<Inner>());
+    check(loaded[1].get<Inner>()->count == 7);
+};

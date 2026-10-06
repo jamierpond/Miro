@@ -4,6 +4,7 @@
 #include "../Reflection/Reflector.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
@@ -33,7 +34,12 @@ enum class PrimitiveKind
 struct TypeNode
 {
     // Nested so it doesn't shadow Miro::Shape (which lives on the
-    // parent Reflector's Options). The IR superset adds an Enum case.
+    // parent Reflector's Options). The IR superset adds Enum and Union
+    // cases — both are object/primitive slots as far as the data
+    // reflectors are concerned, but renderers need them apart — plus
+    // Any for a raw JSON slot (a Miro::JSON field): it accepts any
+    // value, so renderers spell it out as the format's "anything"
+    // — {} in JSON Schema, `unknown` in TypeScript.
     enum class Shape
     {
         Primitive,
@@ -41,10 +47,20 @@ struct TypeNode
         Array,
         Map,
         Enum,
+        Any,
+        Union,
     };
 
     Shape shape = Shape::Primitive;
+
+    // The value may be null (std::optional / OwningPointer).
     bool optional = false;
+
+    // The key may be missing entirely (Miro::Omittable). Independent of
+    // `optional` — Omittable<std::optional<T>> sets both — and renders
+    // as an optional property: `key?:` in TypeScript, left out of JSON
+    // Schema's "required".
+    bool omittable = false;
 
     // Primitive only.
     PrimitiveKind primitive = PrimitiveKind::String;
@@ -62,7 +78,9 @@ struct TypeNode
     // name don't silently collapse into one declaration.
     std::string qualifiedName;
 
-    // Object only: ordered fields.
+    // Object only: ordered fields. A Union node may carry fields too,
+    // when the same reflect() body wrote plain keys next to the
+    // discriminator — renderers intersect them with the arms.
     struct Field
     {
         std::string name;
@@ -70,11 +88,33 @@ struct TypeNode
     };
     Vector<Field> fields;
 
+    // Union only: the discriminator's field name, and one arm per
+    // registered alternative. `tag` is the arm's literal spelling and
+    // `tagIsString` whether it is quoted on the wire.
+    struct Variant
+    {
+        std::string tag;
+        bool tagIsString = false;
+        OwningPointer<TypeNode> type;
+    };
+    std::string tagKey;
+    Vector<Variant> variants;
+
     // Array / Map only: the inner element type.
     OwningPointer<TypeNode> inner;
 
     // Enum only: ordered enumerator names.
     Vector<std::string> enumValues;
+
+    // Enum only: true when the enum travels as its integer value rather
+    // than its name (Miro::EnumFormat<E>::integer). Renderers emit a
+    // numeric enum instead of a string one.
+    bool enumIsInteger = false;
+
+    // Integer-format enums only: the wire number of each enumerator,
+    // parallel to enumValues. Empty for name-format enums, whose numbers
+    // never reach the wire.
+    Vector<std::int64_t> enumNumbers;
 
     // Array only, and only when fixed-size (std::array<T, N> or
     // EA::Array<T, N>): both bounds get N. nullopt for resizable
@@ -100,6 +140,10 @@ public:
     ValueKind kind() const override;
     bool beginNamedType(TypeId id) override;
     void visitEnum(TypeId id, const Vector<std::string_view>& names) override;
+    void visitIntegerEnum(TypeId id, const Vector<EnumEntry>& entries) override;
+    Reflector& beginTaggedAlternative(std::string_view tagKey,
+                                      const TagLiteral& tag,
+                                      Options childOpts) override;
 
     Reflector& atKey(std::string_view key, Options childOpts) override;
     Reflector& atIndex(std::size_t index, Options childOpts) override;
@@ -121,6 +165,10 @@ private:
     std::string activeQualifiedName;
 
     Reflector& spawnChild(TypeNode& targetNode, Options childOpts);
+
+    // Shared by the two visitEnum overrides: turns this slot into an
+    // Enum node carrying the type's identity, with the value lists reset.
+    void beginEnum(TypeId id);
 };
 
 template <typename T>

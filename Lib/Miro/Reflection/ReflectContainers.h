@@ -96,8 +96,8 @@ void reflectValue(Reflector& ref, std::array<T, N>& value)
     }
 }
 
-template <typename V>
-void reflectValue(Reflector& ref, std::map<std::string, V>& value)
+template <typename V, typename Compare>
+void reflectValue(Reflector& ref, std::map<std::string, V, Compare>& value)
 {
     auto childOpts = childOptionsFor<V>(ref.options());
 
@@ -159,6 +159,47 @@ void reflectValue(Reflector& ref, std::optional<T>& value)
             reflectValue(ref, inner);
             value = std::move(inner);
         }
+    }
+}
+
+// Omittable<T> controls whether the key exists at all — the mirror
+// image of std::optional, which controls whether the value is null.
+//
+// Saving, disengaged: we touch nothing, so the slot the parent staged
+// for us is never claimed and the key never appears. Engaged: markPresent()
+// tells the parent to keep the key (even when the inner reflect body
+// writes nothing, as for an empty struct), then the inner T is reflected
+// into the same slot as usual.
+//
+// Loading is the one place where "absent" carries meaning rather than
+// being ignored: a missing key resets the value instead of leaving it
+// untouched. Anything present — null included — engages, so
+// Omittable<std::optional<T>> reads a null key back as engaged-but-empty.
+template <typename T>
+void reflectValue(Reflector& ref, Omittable<T>& value)
+{
+    if (ref.isSaving())
+    {
+        if (ref.isSchema())
+        {
+            auto inner = T {};
+            reflectValue(ref, inner);
+        }
+        else if (value)
+        {
+            ref.markPresent();
+            reflectValue(ref, *value);
+        }
+    }
+    else if (ref.kind() == ValueKind::Absent)
+    {
+        value.reset();
+    }
+    else
+    {
+        auto inner = T {};
+        reflectValue(ref, inner);
+        value = std::move(inner);
     }
 }
 

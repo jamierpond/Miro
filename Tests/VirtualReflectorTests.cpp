@@ -166,6 +166,9 @@ struct TracingReflector : Reflector
                 out << label << "=[";
                 closer = "]";
                 break;
+            case Shape::Raw:
+                out << label << "=<raw>";
+                break;
         }
     }
 

@@ -1,5 +1,6 @@
 #include "Schema.h"
 
+#include <cstdlib>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -39,8 +40,10 @@ void writeRequired(const TypeNode& node, JSON& out)
 {
     auto required = Json::Array {};
 
+    // Nullable fields have always been left out; an omittable one may
+    // legitimately not appear at all, which is what "required" is about.
     for (auto& field: node.fields)
-        if (!field.type->optional)
+        if (!field.type->optional && !field.type->omittable)
             required.emplace_back(field.name);
 
     if (!required.empty())
@@ -63,8 +66,46 @@ JSON renderJsonObjectBody(const TypeNode& node)
     return out;
 }
 
+// Names of an integer enum's members. JSON Schema has no keyword for
+// them, so they go out under the conventional "x-enumNames" extension —
+// validators ignore it, code generators can pick the names back up.
+void writeEnumNames(const TypeNode& node, Json::Object& obj)
+{
+    auto names = Json::Array {};
+    names.reserve(node.enumValues.size());
+
+    for (auto& name: node.enumValues)
+        names.emplace_back(name);
+
+    obj["x-enumNames"] = JSON {std::move(names)};
+}
+
+JSON renderJsonIntegerEnumBody(const TypeNode& node)
+{
+    auto out = JSON {Json::Object {}};
+    auto& obj = out.asObject();
+    obj["type"] = JSON {std::string {"integer"}};
+
+    if (!node.enumNumbers.empty())
+    {
+        auto values = Json::Array {};
+        values.reserve(node.enumNumbers.size());
+
+        for (auto number: node.enumNumbers)
+            values.emplace_back(static_cast<double>(number));
+
+        obj["enum"] = JSON {std::move(values)};
+        writeEnumNames(node, obj);
+    }
+
+    return out;
+}
+
 JSON renderJsonEnumBody(const TypeNode& node)
 {
+    if (node.enumIsInteger)
+        return renderJsonIntegerEnumBody(node);
+
     auto out = JSON {Json::Object {}};
     auto& obj = out.asObject();
     obj["type"] = JSON {std::string {"string"}};
@@ -129,6 +170,68 @@ JSON renderJsonMapBody(const TypeNode& node)
     return out;
 }
 
+// `{"properties": {"type": {"const": 2}}, "required": ["type"]}` — the
+// half of a union arm that pins the discriminator.
+JSON renderJsonTagConstraint(const TypeNode& node, const TypeNode::Variant& variant)
+{
+    auto constant = JSON {Json::Object {}};
+    constant.asObject()["const"] =
+        variant.tagIsString ? JSON {variant.tag}
+                            : JSON {std::strtod(variant.tag.c_str(), nullptr)};
+
+    auto props = JSON {Json::Object {}};
+    props.asObject()[node.tagKey] = std::move(constant);
+
+    auto required = Json::Array {};
+    required.emplace_back(node.tagKey);
+
+    auto out = JSON {Json::Object {}};
+    auto& obj = out.asObject();
+    obj["type"] = JSON {std::string {"object"}};
+    obj["properties"] = std::move(props);
+    obj["required"] = JSON {std::move(required)};
+
+    return out;
+}
+
+JSON renderJsonUnionArm(const TypeNode& node, const TypeNode::Variant& variant)
+{
+    auto parts = Json::Array {};
+    parts.emplace_back(renderJsonTagConstraint(node, variant));
+    parts.emplace_back(renderJsonNode(*variant.type));
+
+    auto out = JSON {Json::Object {}};
+    out.asObject()["allOf"] = JSON {std::move(parts)};
+
+    return out;
+}
+
+// A discriminated union is a oneOf over "tag pinned to this literal,
+// and the alternative's own body". Plain keys the same reflect() body
+// wrote next to the discriminator apply to every arm, so they join as
+// an outer allOf.
+JSON renderJsonUnionBody(const TypeNode& node)
+{
+    auto arms = Json::Array {};
+    for (auto& variant: node.variants)
+        arms.emplace_back(renderJsonUnionArm(node, variant));
+
+    auto oneOf = JSON {Json::Object {}};
+    oneOf.asObject()["oneOf"] = JSON {std::move(arms)};
+
+    if (node.fields.empty())
+        return oneOf;
+
+    auto parts = Json::Array {};
+    parts.emplace_back(renderJsonObjectBody(node));
+    parts.emplace_back(std::move(oneOf));
+
+    auto out = JSON {Json::Object {}};
+    out.asObject()["allOf"] = JSON {std::move(parts)};
+
+    return out;
+}
+
 JSON renderJsonNode(const TypeNode& node)
 {
     auto out = [&]
@@ -152,6 +255,13 @@ JSON renderJsonNode(const TypeNode& node)
                 // Anonymous enum shouldn't happen — visitEnum always sets
                 // a name — but render inline if it does.
                 return node.typeName.empty() ? renderJsonEnumBody(node)
+                                             : makeRefTo(node.typeName);
+
+            case TypeNode::Shape::Any:
+                // The empty schema is JSON Schema's "anything goes".
+                return JSON {Json::Object {}};
+            case TypeNode::Shape::Union:
+                return node.typeName.empty() ? renderJsonUnionBody(node)
                                              : makeRefTo(node.typeName);
         }
 
@@ -182,6 +292,8 @@ JSON buildDefs(std::span<TypeNode> roots)
 
         if (node->shape == TypeNode::Shape::Enum)
             obj = renderJsonEnumBody(*node);
+        else if (node->shape == TypeNode::Shape::Union)
+            obj = renderJsonUnionBody(*node);
         else
             obj = renderJsonObjectBody(*node);
     }

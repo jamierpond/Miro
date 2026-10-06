@@ -1,6 +1,8 @@
 #include "StringUtilities.h"
 
+#include <charconv>
 #include <cstddef>
+#include <system_error>
 
 namespace Miro::Detail
 {
@@ -137,6 +139,19 @@ std::string makeIndent(int width, int depth)
     // (size_type, char) constructor we want.
     // NOLINTNEXTLINE(modernize-return-braced-init-list)
     return std::string(count, ' ');
+}
+
+std::optional<std::int64_t> parseWholeInteger(std::string_view text)
+{
+    auto parsed = std::int64_t {};
+    const auto* begin = text.data();
+    const auto* end = begin + text.size();
+    auto result = std::from_chars(begin, end, parsed);
+
+    if (result.ec != std::errc {} || result.ptr != end)
+        return std::nullopt;
+
+    return parsed;
 }
 
 } // namespace Miro::Detail

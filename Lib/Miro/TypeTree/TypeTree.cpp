@@ -35,9 +35,13 @@ TypeReflector::TypeReflector(TypeNode& nodeToUse,
             node.shape = TypeNode::Shape::Map;
             node.inner = EA::makeOwned<TypeNode>();
             break;
+        case Shape::Raw:
+            node.shape = TypeNode::Shape::Any;
+            break;
     }
 
     node.optional = opts.nullable;
+    node.omittable = opts.omittable;
 }
 
 TypeReflector::~TypeReflector() = default;
@@ -70,16 +74,53 @@ bool TypeReflector::beginNamedType(TypeId id)
     return true;
 }
 
-void TypeReflector::visitEnum(TypeId id, const Vector<std::string_view>& names)
+void TypeReflector::beginEnum(TypeId id)
 {
     node.shape = TypeNode::Shape::Enum;
     node.typeName = std::string {id.shortName};
     node.qualifiedName = std::string {id.qualifiedName};
     node.enumValues.clear();
+    node.enumNumbers.clear();
+}
+
+void TypeReflector::visitEnum(TypeId id, const Vector<std::string_view>& names)
+{
+    beginEnum(id);
     node.enumValues.reserve(names.size());
 
     for (auto& name: names)
         node.enumValues.emplace_back(name);
+}
+
+void TypeReflector::visitIntegerEnum(TypeId id, const Vector<EnumEntry>& entries)
+{
+    beginEnum(id);
+    node.enumIsInteger = true;
+    node.enumValues.reserve(entries.size());
+    node.enumNumbers.reserve(entries.size());
+
+    for (auto& entry: entries)
+    {
+        node.enumValues.emplace_back(entry.name);
+        node.enumNumbers.add(entry.value);
+    }
+}
+
+Reflector& TypeReflector::beginTaggedAlternative(std::string_view tagKey,
+                                                 const TagLiteral& tag,
+                                                 Options childOpts)
+{
+    // The slot was committed as an Object by the constructor (a tagged
+    // union is an object on the wire); the first alternative promotes
+    // it. Any plain fields the same reflect() body already wrote stay
+    // in `fields` and renderers intersect them with the arms.
+    node.shape = TypeNode::Shape::Union;
+    node.tagKey = std::string {tagKey};
+
+    node.variants.add(
+        TypeNode::Variant {tag.text, tag.isString, EA::makeOwned<TypeNode>()});
+
+    return spawnChild(*node.variants.back().type, childOpts);
 }
 
 void TypeReflector::visit(PrimitiveRef ref)
@@ -144,43 +185,55 @@ const std::string& dedupKey(const TypeNode& node)
     return node.qualifiedName.empty() ? node.typeName : node.qualifiedName;
 }
 
-// Collects every named (Object/Enum) node reachable from `node` in
+// Shapes that become their own top-level declaration when they carry a
+// name. Everything else is always rendered inline at its use site.
+bool isDeclarable(const TypeNode& node)
+{
+    return node.shape == TypeNode::Shape::Object
+           || node.shape == TypeNode::Shape::Enum
+           || node.shape == TypeNode::Shape::Union;
+}
+
+void collectNamed(const TypeNode& node,
+                  Vector<std::string>& seen,
+                  Vector<const TypeNode*>& outOrdered);
+
+// Descends into every sub-node a shape can own. Only one of the three
+// is ever populated for a given shape (except a Union carrying plain
+// fields), so walking all of them is cheap and keeps the traversal in
+// one place.
+void collectChildren(const TypeNode& node,
+                     Vector<std::string>& seen,
+                     Vector<const TypeNode*>& outOrdered)
+{
+    for (auto& field: node.fields)
+        collectNamed(*field.type, seen, outOrdered);
+
+    for (auto& variant: node.variants)
+        collectNamed(*variant.type, seen, outOrdered);
+
+    if (node.inner.get() != nullptr)
+        collectNamed(*node.inner, seen, outOrdered);
+}
+
+// Collects every named (Object/Enum/Union) node reachable from `node` in
 // post-order (deepest first). Re-encounters of the same C++ type (by
 // qualified name) become inline name references in rendered output.
 void collectNamed(const TypeNode& node,
                   Vector<std::string>& seen,
                   Vector<const TypeNode*>& outOrdered)
 {
-    if (node.shape == TypeNode::Shape::Object && !node.typeName.empty())
+    if (!isDeclarable(node) || node.typeName.empty())
     {
-        if (!seen.addIfNotThere(dedupKey(node)))
-            return;
-
-        for (auto& field: node.fields)
-            collectNamed(*field.type, seen, outOrdered);
-
-        outOrdered.add(&node);
+        collectChildren(node, seen, outOrdered);
         return;
     }
 
-    if (node.shape == TypeNode::Shape::Enum && !node.typeName.empty())
-    {
-        if (!seen.addIfNotThere(dedupKey(node)))
-            return;
-
-        outOrdered.add(&node);
+    if (!seen.addIfNotThere(dedupKey(node)))
         return;
-    }
 
-    if (node.shape == TypeNode::Shape::Object)
-    {
-        for (auto& field: node.fields)
-            collectNamed(*field.type, seen, outOrdered);
-    }
-    else if (node.inner.get() != nullptr)
-    {
-        collectNamed(*node.inner, seen, outOrdered);
-    }
+    collectChildren(node, seen, outOrdered);
+    outOrdered.add(&node);
 }
 
 // Replaces every non-identifier run in `raw` with a single `_`, then
@@ -248,7 +301,7 @@ NameMap chooseOutputNames(const Vector<const TypeNode*>& ordered)
 // Walks every TypeNode reachable from `root` and rewrites typeName to
 // the chosen output name. References to a named type live as separate
 // TypeNodes (Object/Enum with typeName but no fields), so the walk has
-// to descend into fields and inner.
+// to descend into fields, union arms and inner.
 void applyOutputNames(TypeNode& root, const NameMap& names)
 {
     if (!root.qualifiedName.empty())
@@ -260,6 +313,9 @@ void applyOutputNames(TypeNode& root, const NameMap& names)
 
     for (auto& field: root.fields)
         applyOutputNames(*field.type, names);
+
+    for (auto& variant: root.variants)
+        applyOutputNames(*variant.type, names);
 
     if (root.inner.get() != nullptr)
         applyOutputNames(*root.inner, names);

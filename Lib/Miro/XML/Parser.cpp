@@ -1,4 +1,7 @@
 #include "Xml.h"
+#include "../Unicode/Unicode.h"
+
+#include <cstdint>
 
 namespace Miro::Xml
 {
@@ -15,12 +18,29 @@ public:
 
     Node parseDocument()
     {
-        skipWhitespace();
+        skipMisc();
 
         if (atEnd())
             error("expected root element");
 
         return parseElement();
+    }
+
+    // Skips whitespace, comments and processing instructions (including
+    // the XML declaration) — everything allowed around the root element.
+    void skipMisc()
+    {
+        while (true)
+        {
+            skipWhitespace();
+
+            if (startsWith("<!--"))
+                skipComment();
+            else if (startsWith("<?"))
+                skipProcessingInstruction();
+            else
+                return;
+        }
     }
 
     void skipWhitespace()
@@ -36,8 +56,8 @@ public:
 
     [[noreturn]] void error(const std::string& messageToUse) const
     {
-        throw ParseError("XML parse error at position "
-                         + std::to_string(pos - input) + ": " + messageToUse);
+        throw ParseError("XML parse error at position " + std::to_string(pos - input)
+                         + ": " + messageToUse);
     }
 
 private:
@@ -121,7 +141,15 @@ private:
                 return;
             }
 
-            if (*pos == '<')
+            if (startsWith("<!--"))
+            {
+                skipComment();
+            }
+            else if (startsWith("<?"))
+            {
+                skipProcessingInstruction();
+            }
+            else if (*pos == '<')
             {
                 node.children.add(parseElement());
             }
@@ -150,6 +178,33 @@ private:
 
         skipWhitespace();
         expect('>');
+    }
+
+    void skipComment()
+    {
+        consume("<!--");
+
+        while (pos < end && !startsWith("-->"))
+            ++pos;
+
+        if (pos >= end)
+            error("unterminated comment");
+
+        consume("-->");
+    }
+
+    void skipProcessingInstruction()
+    {
+        consume("<?");
+        parseName();
+
+        while (pos < end && !startsWith("?>"))
+            ++pos;
+
+        if (pos >= end)
+            error("unterminated processing instruction");
+
+        consume("?>");
     }
 
     std::string parseName()
@@ -181,6 +236,9 @@ private:
         auto name = std::string_view(start, static_cast<std::size_t>(pos - start));
         ++pos;
 
+        if (!name.empty() && name[0] == '#')
+            return parseCharacterReference(name.substr(1));
+
         if (name == "amp")
             return "&";
         if (name == "lt")
@@ -193,6 +251,73 @@ private:
             return "'";
 
         error("unknown entity '&" + std::string(name) + ";'");
+    }
+
+    // The digits of a numeric character reference, after "&#" and
+    // before ";": decimal ("233") or hex ("xE9" / "XE9").
+    std::string parseCharacterReference(std::string_view digits)
+    {
+        auto base = std::uint32_t {10};
+
+        if (!digits.empty() && (digits[0] == 'x' || digits[0] == 'X'))
+        {
+            base = 16;
+            digits.remove_prefix(1);
+        }
+
+        if (digits.empty())
+            error("empty character reference");
+
+        auto codePoint = std::uint32_t {0};
+
+        for (auto c: digits)
+        {
+            auto digit = hexDigitValue(c);
+
+            if (digit < 0 || static_cast<std::uint32_t>(digit) >= base)
+                error("invalid digit '" + std::string(1, c)
+                      + "' in character reference");
+
+            codePoint = codePoint * base + static_cast<std::uint32_t>(digit);
+
+            if (codePoint > 0x10FFFF)
+                error("character reference out of range");
+        }
+
+        if (!isValidCharacter(codePoint))
+            error("character reference to an invalid XML character");
+
+        auto result = std::string {};
+        Unicode::appendUtf8(result, static_cast<char32_t>(codePoint));
+        return result;
+    }
+
+    static int hexDigitValue(char c)
+    {
+        if (c >= '0' && c <= '9')
+            return c - '0';
+        if (c >= 'a' && c <= 'f')
+            return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F')
+            return c - 'A' + 10;
+
+        return -1;
+    }
+
+    // XML 1.0 Char production: excludes NUL, most C0 controls,
+    // the surrogate range and anything past U+10FFFF.
+    static bool isValidCharacter(std::uint32_t codePoint)
+    {
+        if (codePoint == 0x9 || codePoint == 0xA || codePoint == 0xD)
+            return true;
+
+        if (codePoint < 0x20)
+            return false;
+
+        if (codePoint >= 0xD800 && codePoint <= 0xDFFF)
+            return false;
+
+        return codePoint <= 0x10FFFF;
     }
 
     static bool isNameStart(char c)
@@ -257,7 +382,7 @@ Node parse(std::string_view inputToUse)
 {
     auto parser = Parser(inputToUse);
     auto result = parser.parseDocument();
-    parser.skipWhitespace();
+    parser.skipMisc();
 
     if (!parser.atEnd())
         parser.error("unexpected trailing content");

@@ -1,10 +1,12 @@
 #pragma once
 
+#include "../Detail/StringUtilities.h"
 #include "Reflector.h"
 #include "TypeName.h"
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -27,6 +29,27 @@ struct EnumRange
 {
     static constexpr int minValue = -128;
     static constexpr int maxValue = 127;
+};
+
+// Specialize this to change how a given enum type is written. By
+// default an enum saves as its enumerator name (a JSON string), which
+// is the readable choice for a format you own. Set `integer` to true
+// for wire formats that spell enums as numbers — Discord's
+// `{"type": 1}`, most REST APIs with numeric kind fields — and the enum
+// saves as its underlying value instead:
+//
+//   template <>
+//   struct Miro::EnumFormat<Discord::ChannelType>
+//   {
+//       static constexpr bool integer = true;
+//   };
+//
+// Loading is unaffected either way: a number and an enumerator name are
+// both accepted whatever the save format is.
+template <typename E>
+struct EnumFormat
+{
+    static constexpr bool integer = false;
 };
 
 namespace Detail
@@ -134,52 +157,131 @@ Vector<std::string_view> enumNames()
     return names;
 }
 
+// enumNames() plus the number behind each name. Used by the schema walk
+// for integer-format enums, where a renderer needs both halves to emit
+// something like `enum ChannelType { guildText = 0, dm = 1 }`.
+template <typename E>
+    requires std::is_enum_v<E>
+Vector<EnumEntry> enumEntries()
+{
+    using Underlying = std::underlying_type_t<E>;
+
+    auto entries = Vector<EnumEntry> {};
+
+    for (auto& [entryValue, name]: Detail::enumTable<E>)
+        if (!name.empty())
+            entries.add(EnumEntry {
+                name,
+                static_cast<std::int64_t>(static_cast<Underlying>(entryValue))});
+
+    return entries;
+}
+
 namespace Detail
 {
 
 template <typename T>
     requires std::is_enum_v<T>
+std::int64_t enumToNumber(T value)
+{
+    return static_cast<std::int64_t>(static_cast<std::underlying_type_t<T>>(value));
+}
+
+template <typename T>
+    requires std::is_enum_v<T>
+T enumFromNumber(std::int64_t numeric)
+{
+    return static_cast<T>(static_cast<std::underlying_type_t<T>>(numeric));
+}
+
+template <typename T>
+    requires std::is_enum_v<T>
+void saveEnum(Reflector& ref, T& value)
+{
+    auto id = TypeId {typeNameOf<T>(), qualifiedNameOf<T>()};
+
+    if (ref.isSchema())
+    {
+        if constexpr (EnumFormat<T>::integer)
+            ref.visitIntegerEnum(id, enumEntries<T>());
+        else
+            ref.visitEnum(id, enumNames<T>());
+
+        return;
+    }
+
+    // Name format also falls through to the numeric write below when the
+    // value has no enumerator — a number round-trips, an empty string
+    // wouldn't.
+    if constexpr (!EnumFormat<T>::integer)
+    {
+        if (auto name = std::string {enumToString(value)}; !name.empty())
+        {
+            ref.visit(name);
+            return;
+        }
+    }
+
+    auto numeric = enumToNumber(value);
+    ref.visit(numeric);
+}
+
+template <typename T>
+    requires std::is_enum_v<T>
+void loadEnum(Reflector& ref, T& value)
+{
+    auto kind = ref.kind();
+
+    if (kind == ValueKind::String)
+    {
+        auto text = std::string {};
+        ref.visit(text);
+
+        if (auto parsed = enumFromString<T>(text))
+        {
+            value = *parsed;
+            return;
+        }
+
+        if constexpr (EnumFormat<T>::integer)
+        {
+            if (auto numeric = parseWholeInteger(text))
+                value = enumFromNumber<T>(*numeric);
+        }
+    }
+    else if (kind == ValueKind::Number)
+    {
+        auto numeric = std::int64_t {};
+        ref.visit(numeric);
+        value = enumFromNumber<T>(numeric);
+    }
+}
+
+template <typename T>
+    requires std::is_enum_v<T>
 void reflectValue(Reflector& ref, T& value)
 {
-    using Underlying = std::underlying_type_t<T>;
-
     if (ref.isSaving())
-    {
-        if (ref.isSchema())
-        {
-            ref.visitEnum(TypeId {typeNameOf<T>(), qualifiedNameOf<T>()},
-                          enumNames<T>());
-        }
-        else if (auto name = std::string {enumToString(value)}; !name.empty())
-        {
-            ref.visit(name);
-        }
-        else
-        {
-            auto numeric = static_cast<std::int64_t>(static_cast<Underlying>(value));
-            ref.visit(numeric);
-        }
-    }
+        saveEnum(ref, value);
     else
-    {
-        auto kind = ref.kind();
-
-        if (kind == ValueKind::String)
-        {
-            auto name = std::string {};
-            ref.visit(name);
-
-            if (auto parsed = enumFromString<T>(name))
-                value = *parsed;
-        }
-        else if (kind == ValueKind::Number)
-        {
-            auto numeric = std::int64_t {};
-            ref.visit(numeric);
-            value = static_cast<T>(static_cast<Underlying>(numeric));
-        }
-    }
+        loadEnum(ref, value);
 }
 
 } // namespace Detail
 } // namespace Miro
+
+// Non-intrusive one-liner for the EnumFormat specialization above, in
+// the spirit of MIRO_REFLECT_EXTERNAL: place it at global scope once the
+// enum is declared, and the type saves as its integer value everywhere
+// it appears — on its own, inside a vector, an optional or a map value.
+//
+//   MIRO_ENUM_AS_INTEGER(Discord::ChannelType)
+#define MIRO_ENUM_AS_INTEGER(Type)                                                  \
+    namespace Miro                                                                  \
+    {                                                                               \
+    template <>                                                                     \
+    struct EnumFormat<Type>                                                         \
+    {                                                                               \
+        static constexpr bool integer = true;                                       \
+    };                                                                              \
+    }

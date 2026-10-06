@@ -10,10 +10,12 @@
 //   <Miro/Xml.h>     — XML value type + XML serialization
 //   <Miro/Bridge.h>  — runtime command/event bridge
 //   <Miro/Codegen.h> — type-export / codegen toolchain
+//   <Miro/Unicode.h> — Unicode character properties + UTF-8
 
 #include "Binary.h"
 #include "Bridge.h"
 #include "Codegen.h"
 #include "Json.h"
 #include "Reflect.h"
+#include "Unicode.h"
 #include "Xml.h"

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Omittable.h"
 #include "Reflector.h"
 #include "TypeName.h"
 
@@ -14,6 +15,11 @@
 #include <utility>
 #include <variant>
 #include <vector>
+
+namespace Miro::Json
+{
+struct Value;
+}
 
 namespace Miro::Detail
 {
@@ -64,6 +70,31 @@ struct InnerOf<OwningPointer<T>>
     using type = T;
 };
 
+// Omittable<T> decides whether the *key* exists; whether the value can
+// be null is still up to what it wraps. So Omittable<int> is not
+// nullable, Omittable<std::optional<int>> is, and the shape comes from
+// unwrapping both layers.
+template <typename T>
+struct IsOptional<Omittable<T>> : IsOptional<T>
+{
+};
+
+template <typename T>
+struct InnerOf<Omittable<T>>
+{
+    using type = typename InnerOf<T>::type;
+};
+
+template <typename T>
+struct IsOmittable : std::false_type
+{
+};
+
+template <typename T>
+struct IsOmittable<Omittable<T>> : std::true_type
+{
+};
+
 // Detects whether T derives (directly or indirectly) from some
 // EA::Vector<U, A>. Used so anything inheriting from EA::Vector — e.g.
 // EA::OwnedVector or a user's own subclass — is classified as array-
@@ -106,8 +137,8 @@ struct IsMapLike : std::false_type
 {
 };
 
-template <typename V>
-struct IsMapLike<std::map<std::string, V>> : std::true_type
+template <typename V, typename Compare>
+struct IsMapLike<std::map<std::string, V, Compare>> : std::true_type
 {
 };
 
@@ -130,6 +161,21 @@ struct IsVariant<std::variant<Ts...>> : std::true_type
 {
 };
 
+template <typename... Ts>
+struct IsVariant<EA::Variant<Ts...>> : std::true_type
+{
+};
+
+// Raw JSON slots carry their structure in the value, not in the C++
+// type, so they classify as Shape::Raw. Specialized in ReflectJson.h
+// (for Miro::Json::Value and anything derived from it, e.g. Json::Any)
+// where Value is a complete type — this header only forward-declares
+// it, so it stays free of the JSON layer.
+template <typename T, typename = void>
+struct IsRawJson : std::false_type
+{
+};
+
 template <typename T>
 constexpr bool isOptional()
 {
@@ -137,11 +183,19 @@ constexpr bool isOptional()
 }
 
 template <typename T>
+constexpr bool isOmittable()
+{
+    return IsOmittable<T>::value;
+}
+
+template <typename T>
 consteval Shape shapeOf()
 {
     using U = typename InnerOf<T>::type;
 
-    if constexpr (IsArrayLike<U>::value)
+    if constexpr (IsRawJson<U>::value)
+        return Shape::Raw;
+    else if constexpr (IsArrayLike<U>::value)
         return Shape::Array;
     else if constexpr (IsMapLike<U>::value)
         return Shape::Map;
@@ -155,15 +209,16 @@ consteval Shape shapeOf()
 
 // Build child Options from a parent's Options. mode, schema and the
 // custom payload inherit (the plain copy of `parent` carries them);
-// shape and nullable are decided by the value type T. Not constexpr:
-// Options now holds a std::string (CustomOptions), and this is only
-// ever evaluated at runtime while spawning a child reflector.
+// shape, nullable and omittable are decided by the value type T. Not
+// constexpr: Options now holds a std::string (CustomOptions), and this
+// is only ever evaluated at runtime while spawning a child reflector.
 template <typename T>
 Options childOptionsFor(const Options& parent)
 {
     auto opts = parent;
     opts.shape = shapeOf<T>();
     opts.nullable = isOptional<T>();
+    opts.omittable = isOmittable<T>();
     return opts;
 }
 
@@ -177,6 +232,7 @@ Options topLevelOptions(Mode mode, bool schema = false, CustomOptions custom = {
         .mode = mode,
         .shape = shapeOf<T>(),
         .nullable = isOptional<T>(),
+        .omittable = isOmittable<T>(),
         .schema = schema,
         .custom = std::move(custom),
     };
@@ -192,11 +248,14 @@ void reflectValue(Reflector& ref, std::vector<T>& value);
 template <typename T, std::size_t N>
 void reflectValue(Reflector& ref, std::array<T, N>& value);
 
-template <typename V>
-void reflectValue(Reflector& ref, std::map<std::string, V>& value);
+template <typename V, typename Compare>
+void reflectValue(Reflector& ref, std::map<std::string, V, Compare>& value);
 
 template <typename T>
 void reflectValue(Reflector& ref, std::optional<T>& value);
+
+template <typename T>
+void reflectValue(Reflector& ref, Omittable<T>& value);
 
 template <typename T, typename Allocator>
 void reflectValue(Reflector& ref, Vector<T, Allocator>& value);
@@ -213,9 +272,16 @@ void reflectValue(Reflector& ref, OwningPointer<T>& value);
 template <typename... Ts>
 void reflectValue(Reflector& ref, std::variant<Ts...>& value);
 
+template <typename... Ts>
+void reflectValue(Reflector& ref, EA::Variant<Ts...>& value);
+
 template <typename T>
     requires std::is_enum_v<T>
 void reflectValue(Reflector& ref, T& value);
+
+// Raw JSON value — declared in ReflectJson.h, defined in ReflectJson.cpp.
+// Json::Any binds to this overload through its Value base.
+void reflectValue(Reflector& ref, Json::Value& value);
 
 inline void reflectValue(Reflector& ref, bool& value)
 {

@@ -14,11 +14,13 @@
 #include <ea_data_structures/Structures/MapVector.h>
 #include <ea_data_structures/Structures/OwnedVector.h>
 #include <ea_data_structures/Structures/Vector.h>
+#include <ea_data_structures/ValueWrapper/Variant.h>
 
 namespace Miro
 {
 using EA::Array;
 using EA::OwnedVector;
 using EA::OwningPointer;
+using EA::Variant;
 using EA::Vector;
 } // namespace Miro

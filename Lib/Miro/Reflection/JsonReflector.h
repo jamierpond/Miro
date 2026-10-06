@@ -3,6 +3,8 @@
 #include "../JSON/Json.h"
 #include "Reflector.h"
 
+#include <string>
+
 namespace Miro
 {
 
@@ -12,6 +14,14 @@ namespace Miro
 // that commit their own shape the same way. The child is owned by
 // the parent and lives until the next atKey/atIndex call (or until
 // the parent is destroyed).
+//
+// The one exception is an omittable child (the slot of an Omittable<T>
+// field): its shape is committed into the parent's `pendingSlot`
+// scratch area instead, and the key is created only when the child
+// calls markPresent() — at which point the staged content moves into
+// the real key and the child retargets onto it. A child that never
+// claims leaves no trace, which is exactly "the key is absent".
+// Everything else keeps the eager contract.
 class JsonReflector final : public Reflector
 {
 public:
@@ -20,7 +30,9 @@ public:
 
     void visit(PrimitiveRef ref) override;
     void writeNull() override;
+    void markPresent() override;
     ValueKind kind() const override;
+    bool isIntegerNumber() const override;
 
     Reflector& atKey(std::string_view key, Options childOpts) override;
     Reflector& atIndex(std::size_t index, Options childOpts) override;
@@ -32,7 +44,10 @@ public:
     void requirePolymorphicSupport(std::string_view) override {}
 
 private:
-    JSON& slot;
+    // A pointer rather than a reference because an omittable child
+    // retargets from the parent's staging slot onto the real key when
+    // it turns out to be present. Never null.
+    JSON* slot = nullptr;
     bool absent = false;
 
     // Sentinel used as the target slot when loading and the requested
@@ -40,11 +55,24 @@ private:
     // become no-ops, matching the prior "skip body" semantics.
     JSON missingSlot;
 
+    // Staging for an omittable child: the scratch slot it writes into
+    // before claiming, and the key it would claim. Reset on each new
+    // omittable spawn; simply abandoned when the child never claims.
+    JSON pendingSlot;
+    std::string pendingKey;
+
+    // Set on an omittable child, and cleared the moment it claims its
+    // key. Null on every other reflector, which is what makes
+    // markPresent() a no-op where absence can't be expressed (array
+    // elements, the root).
+    JsonReflector* owner = nullptr;
+
     OwningPointer<JsonReflector> currentChild;
 
     JsonReflector(JSON& slotToUse, Options optsToUse, bool absentToUse);
 
     void commitShape();
+    JSON& claimPendingKey();
 
     void savePrimitive(PrimitiveRef ref);
     void loadPrimitive(PrimitiveRef ref);
@@ -57,6 +85,7 @@ private:
 
     Reflector& spawnChild(JSON& targetSlot, Options childOpts, bool absentToUse);
     Reflector& spawnMissingChild(Options childOpts);
+    Reflector& spawnOmittableChild(std::string_view key, Options childOpts);
 };
 
 } // namespace Miro

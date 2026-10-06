@@ -67,16 +67,20 @@ Vector<CommandExport::CommandEntry> toCommandEntries(
 
     for (auto& r: records)
     {
-        auto entry = CommandExport::CommandEntry {};
-        entry.name = r.name;
-        entry.hasRequest = bool(r.req);
-        entry.requestTypeName = r.req.name;
-        entry.requestQualifiedName = r.req.qualifiedName;
-        entry.hasResponse = bool(r.res);
-        entry.responseTypeName = r.res.name;
-        entry.responseQualifiedName = r.res.qualifiedName;
-        // thunk left empty: codegen path doesn't dispatch.
-        entries.add(std::move(entry));
+        // Built in one initializer rather than field by field: the
+        // piecewise form has GCC reporting the reads of `r` against the
+        // half-written `entry` (-Wmaybe-uninitialized). thunk is left
+        // empty either way — the codegen path doesn't dispatch.
+        entries.add(CommandExport::CommandEntry {
+            .name = r.name,
+            .hasRequest = bool(r.req),
+            .requestTypeName = r.req.name,
+            .requestQualifiedName = r.req.qualifiedName,
+            .hasResponse = bool(r.res),
+            .responseTypeName = r.res.name,
+            .responseQualifiedName = r.res.qualifiedName,
+            .thunk = {},
+        });
     }
 
     return entries;

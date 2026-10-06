@@ -27,8 +27,7 @@ std::string primitiveToString(T* ptr)
         // Match JSON printer behavior — emit integers without a decimal
         // point so round-trips through int-backed reflect targets don't
         // pick up "5.0" strings.
-        if (std::isfinite(*ptr) && *ptr == std::floor(*ptr)
-            && std::abs(*ptr) < 1e15)
+        if (std::isfinite(*ptr) && *ptr == std::floor(*ptr) && std::abs(*ptr) < 1e15)
         {
             auto stream = std::ostringstream {};
             stream << static_cast<long long>(*ptr);
@@ -110,6 +109,26 @@ XmlReflector::XmlReflector(Slot slotToUse, Options optsToUse)
 
 XmlReflector::~XmlReflector() = default;
 
+void XmlReflector::markPresent()
+{
+    if (owner == nullptr)
+        return;
+
+    slot = ElementSlot {&owner->claimPendingElement()};
+    owner = nullptr;
+}
+
+// Appends the node this child was staged for, in document order — the
+// staged element goes in exactly where the field was reflected — and
+// hands back the real node for the child to retarget onto.
+Xml::Node& XmlReflector::claimPendingElement()
+{
+    auto* node = std::get<ElementSlot>(slot).node;
+    node->children.add(std::move(pendingNode));
+    pendingNode = Xml::Node {};
+    return node->children.back();
+}
+
 ValueKind XmlReflector::kind() const
 {
     // We never report Null — XML has no native null representation.
@@ -123,6 +142,23 @@ ValueKind XmlReflector::kind() const
 
     if (std::holds_alternative<ArraySlot>(slot))
         return ValueKind::Array;
+
+    // An element with no attributes and no children carries nothing but
+    // its text, so it reports as a string exactly like an attribute
+    // does. That's what lets a value-shaped element — an array item
+    // holding an enum, say — be read back from its text rather than
+    // mistaken for an object with no readable content. A raw-JSON slot
+    // has to recover the value's kind from the document alone, and an
+    // element with no text either is the most XML can say about an
+    // empty object, so only a leaf that actually has text is a string
+    // there.
+    const auto& element = *std::get<ElementSlot>(slot).node;
+
+    if (element.attributes.empty() && element.children.empty())
+    {
+        if (shape() != Shape::Raw || !element.text.empty())
+            return ValueKind::String;
+    }
 
     return ValueKind::Object;
 }
@@ -189,8 +225,8 @@ Reflector& XmlReflector::atKey(std::string_view key, Options childOpts)
 }
 
 Reflector& XmlReflector::atKeyOnElement(Xml::Node& parent,
-                                       std::string_view key,
-                                       Options childOpts)
+                                        std::string_view key,
+                                        Options childOpts)
 {
     auto keyStr = std::string(key);
 
@@ -203,12 +239,41 @@ Reflector& XmlReflector::atKeyOnElement(Xml::Node& parent,
             return spawnAttribute(parent, std::move(keyStr), childOpts);
 
         case Shape::Array:
+            // An omitted array key left no siblings behind. XML can't
+            // tell that from an engaged-but-empty vector, and "absent"
+            // is the reading that round-trips, so prefer it.
+            if (isLoading() && childOpts.omittable
+                && countSiblings(parent, keyStr) == 0)
+                return spawnMissing(childOpts);
+
             return spawnArray(parent, std::move(keyStr), childOpts);
+
+        case Shape::Raw:
+            // A raw JSON value has no static shape, so saving always
+            // makes an element and lets the value's own kind decide
+            // what goes inside it (its children are spawned with the
+            // shape read off the value, so primitives still become
+            // attributes). Loading has to guess from the document: an
+            // attribute is a primitive the save side wrote, repeated
+            // siblings are an array, a single child is a nested value.
+            if (isLoading())
+            {
+                if (parent.attributes.contains(keyStr))
+                    return spawnAttribute(parent, std::move(keyStr), childOpts);
+
+                if (countSiblings(parent, keyStr) > 1)
+                    return spawnArray(parent, std::move(keyStr), childOpts);
+            }
+
+            [[fallthrough]];
 
         case Shape::Object:
         case Shape::Map:
             if (isSaving())
             {
+                if (childOpts.omittable)
+                    return spawnPendingElement(std::move(keyStr), childOpts);
+
                 parent.children.add(Xml::Node {.name = keyStr});
                 return spawnElement(parent.children.back(), childOpts);
             }
@@ -224,6 +289,8 @@ Reflector& XmlReflector::atKeyOnElement(Xml::Node& parent,
 
 Reflector& XmlReflector::atIndex(std::size_t index, Options childOpts)
 {
+    // No staging here: an omittable array element has no absent form —
+    // repeated siblings can't have a hole in them.
     return std::visit(
         [&](auto& s) -> Reflector&
         {
@@ -238,9 +305,9 @@ Reflector& XmlReflector::atIndex(std::size_t index, Options childOpts)
 }
 
 Reflector& XmlReflector::atIndexOnArray(Xml::Node& parent,
-                                       const std::string& elementName,
-                                       std::size_t index,
-                                       Options childOpts)
+                                        const std::string& elementName,
+                                        std::size_t index,
+                                        Options childOpts)
 {
     if (isSaving())
     {
@@ -348,8 +415,8 @@ Reflector& XmlReflector::spawnElement(Xml::Node& node, Options childOpts)
 }
 
 Reflector& XmlReflector::spawnAttribute(Xml::Node& parent,
-                                       std::string name,
-                                       Options childOpts)
+                                        std::string name,
+                                        Options childOpts)
 {
     currentChild.reset();
     currentChild =
@@ -357,13 +424,11 @@ Reflector& XmlReflector::spawnAttribute(Xml::Node& parent,
     return *currentChild;
 }
 
-Reflector& XmlReflector::spawnArray(Xml::Node& parent,
-                                    std::string name,
-                                    Options childOpts)
+Reflector&
+    XmlReflector::spawnArray(Xml::Node& parent, std::string name, Options childOpts)
 {
     currentChild.reset();
-    currentChild =
-        new XmlReflector(ArraySlot {&parent, std::move(name)}, childOpts);
+    currentChild = new XmlReflector(ArraySlot {&parent, std::move(name)}, childOpts);
     return *currentChild;
 }
 
@@ -371,6 +436,19 @@ Reflector& XmlReflector::spawnMissing(Options childOpts)
 {
     currentChild.reset();
     currentChild = new XmlReflector(MissingSlot {}, childOpts);
+    return *currentChild;
+}
+
+// Points the child at the staged node instead of a real child element.
+// Nothing is appended unless the child claims it back via markPresent();
+// an abandoned staged node is simply overwritten by the next omittable
+// sibling.
+Reflector& XmlReflector::spawnPendingElement(std::string name, Options childOpts)
+{
+    pendingNode = Xml::Node {.name = std::move(name)};
+
+    spawnElement(pendingNode, childOpts);
+    currentChild->owner = this;
     return *currentChild;
 }
 

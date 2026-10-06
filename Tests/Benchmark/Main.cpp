@@ -118,6 +118,60 @@ std::string generateStringHeavy(int countToUse)
     return stream.str();
 }
 
+// Byte-level BPE tokens the way a HuggingFace tokenizer.json spells them:
+// short, mostly ASCII, and about a third carrying the leading U+0120
+// ("Ġ", the visible stand-in for a space) that makes them multi-byte.
+std::string generateVocabularyKey(int indexToUse)
+{
+    static constexpr auto letters = std::string_view {"abcdefghijklmnopqrstuvwxyz"};
+
+    auto key = std::string {};
+
+    if (indexToUse % 3 == 0)
+        key += "\xC4\xA0";
+
+    auto remainder = indexToUse;
+
+    do
+    {
+        key += letters[static_cast<std::size_t>(remainder % 26)];
+        remainder /= 26;
+    } while (remainder > 0);
+
+    if (indexToUse % 5 == 0)
+        key += "\xC3\xA4";
+
+    return key;
+}
+
+std::string generateVocabulary(int countToUse)
+{
+    auto stream = std::ostringstream {};
+    stream << "{";
+
+    for (auto i = 0; i < countToUse; ++i)
+    {
+        if (i > 0)
+            stream << ",";
+
+        stream << '"' << generateVocabularyKey(i) << "\":" << i;
+    }
+
+    stream << "}";
+    return stream.str();
+}
+
+std::vector<std::string> generateVocabularyKeys(int countToUse)
+{
+    auto keys = std::vector<std::string> {};
+    keys.reserve(static_cast<std::size_t>(countToUse));
+
+    for (auto i = 0; i < countToUse; ++i)
+        keys.push_back(generateVocabularyKey(i));
+
+    return keys;
+}
+
 void runBenchmark(const std::string& nameToUse,
                   const std::string& jsonToUse,
                   int iterationsToUse)
@@ -132,6 +186,52 @@ void runBenchmark(const std::string& nameToUse,
                             [&] { auto v = nlohmann::json::parse(jsonToUse); });
 
     report(miro, nlohmann);
+}
+
+void runLookupBenchmark(const std::string& nameToUse,
+                        const std::string& jsonToUse,
+                        const std::vector<std::string>& keysToUse,
+                        int iterationsToUse)
+{
+    std::cout << nameToUse << " (" << keysToUse.size() << " keys):\n";
+
+    auto miroValue = Miro::Json::parse(jsonToUse);
+    auto& miroObject = miroValue.asObject();
+    auto nlohmannValue = nlohmann::json::parse(jsonToUse);
+
+    auto found = std::size_t {};
+
+    auto miro = measure("Miro",
+                        iterationsToUse,
+                        [&]
+                        {
+                            for (const auto& key: keysToUse)
+                            {
+                                auto view = std::string_view {key};
+
+                                if (Miro::Json::find(miroObject, view) != nullptr)
+                                    ++found;
+                            }
+                        });
+
+    auto nlohmann =
+        measure("nlohmann",
+                iterationsToUse,
+                [&]
+                {
+                    for (const auto& key: keysToUse)
+                    {
+                        auto view = std::string_view {key};
+
+                        if (nlohmannValue.find(view) != nlohmannValue.end())
+                            ++found;
+                    }
+                });
+
+    report(miro, nlohmann);
+
+    if (found != keysToUse.size() * static_cast<std::size_t>(iterationsToUse) * 2)
+        std::cout << "  WARNING: lookups did not all hit\n";
 }
 
 int main()
@@ -149,6 +249,12 @@ int main()
 
     auto stringHeavy = generateStringHeavy(10000);
     runBenchmark("String-heavy object", stringHeavy, 20);
+
+    auto vocabulary = generateVocabulary(50000);
+    runBenchmark("Large flat object", vocabulary, 20);
+
+    auto vocabularyKeys = generateVocabularyKeys(50000);
+    runLookupBenchmark("Key lookup", vocabulary, vocabularyKeys, 20);
 
     return 0;
 }

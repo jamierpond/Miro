@@ -31,12 +31,12 @@ std::string_view cppPrimitive(TypeTree::PrimitiveKind kind)
 }
 
 // Default initializer for primitive fields so the generated structs
-// produce predictable values without explicit construction. Containers
-// and optionals are already empty by default; named types fall back to
-// the user's own default constructor.
+// produce predictable values without explicit construction. Containers,
+// optionals and omittables are already empty by default; named types
+// fall back to the user's own default constructor.
 std::string defaultInitFor(const TypeNode& field)
 {
-    if (field.optional)
+    if (field.optional || field.omittable)
         return {};
 
     if (field.shape != TypeNode::Shape::Primitive)
@@ -57,19 +57,57 @@ std::string defaultInitFor(const TypeNode& field)
     return {};
 }
 
-std::string renderType(const TypeNode& node);
+std::string renderType(const TypeNode& node, Modes mode);
 
-// Wraps `renderType(node)` in `std::optional<...>` when the node is
-// nullable. Used for fields and inner element types.
-std::string renderTypeWithOptional(const TypeNode& node)
+// Wraps `renderType(node)` in the C++ spelling of the node's
+// optionality: `std::optional<...>` when the value may be null,
+// `Miro::Omittable<...>` when the key may be missing. Used for fields
+// and inner element types.
+std::string renderTypeWithOptional(const TypeNode& node, Modes mode)
 {
-    auto base = renderType(node);
+    auto base = renderType(node, mode);
+
     if (node.optional)
-        return "std::optional<" + base + ">";
+        base = "std::optional<" + base + ">";
+
+    if (node.omittable)
+    {
+        // The pure header must not depend on Miro, so "may be absent"
+        // collapses onto std::optional there — lossy on the wire, but it
+        // compiles standalone. The Miro header keeps the distinction.
+        if (mode == Modes::Miro)
+            base = "Miro::Omittable<" + base + ">";
+        else if (!node.optional)
+            base = "std::optional<" + base + ">";
+    }
+
     return base;
 }
 
-std::string renderType(const TypeNode& node)
+// A discriminated union has no dedicated C++ spelling in plain-struct
+// output; std::variant lists the same alternatives, which is also what
+// a Miro-side tagged union stores. The discriminator itself is dropped
+// — it is derived from the active alternative, not a field.
+std::string renderVariantType(const TypeNode& node, Modes mode)
+{
+    if (node.variants.empty())
+        return "std::monostate";
+
+    auto out = std::string {"std::variant<"};
+    auto first = true;
+
+    for (auto& variant: node.variants)
+    {
+        if (!first)
+            out += ", ";
+        first = false;
+        out += renderType(*variant.type, mode);
+    }
+
+    return out + ">";
+}
+
+std::string renderType(const TypeNode& node, Modes mode)
 {
     switch (node.shape)
     {
@@ -78,20 +116,28 @@ std::string renderType(const TypeNode& node)
         case TypeNode::Shape::Object:
         case TypeNode::Shape::Enum:
             return node.typeName;
+        case TypeNode::Shape::Union:
+            return node.typeName.empty() ? renderVariantType(node, mode)
+                                         : node.typeName;
         case TypeNode::Shape::Array:
-            return "std::vector<" + renderTypeWithOptional(*node.inner) + ">";
+            return "std::vector<" + renderTypeWithOptional(*node.inner, mode) + ">";
         case TypeNode::Shape::Map:
-            return "std::map<std::string, " + renderTypeWithOptional(*node.inner)
-                   + ">";
+            return "std::map<std::string, "
+                   + renderTypeWithOptional(*node.inner, mode) + ">";
+        case TypeNode::Shape::Any:
+            // Plain C++ has no spelling for "any JSON value", so both
+            // flavours name Miro's own — a PureCPP header that carries
+            // one of these does depend on Miro after all.
+            return "Miro::JSON";
     }
     return "auto";
 }
 
-void emitStructFields(std::ostringstream& out, const TypeNode& node)
+void emitStructFields(std::ostringstream& out, const TypeNode& node, Modes mode)
 {
     for (auto& field: node.fields)
-        out << "    " << renderTypeWithOptional(*field.type) << " " << field.name
-            << defaultInitFor(*field.type) << ";\n";
+        out << "    " << renderTypeWithOptional(*field.type, mode) << " "
+            << field.name << defaultInitFor(*field.type) << ";\n";
 }
 
 void emitReflectMacro(std::ostringstream& out, const TypeNode& node)
@@ -116,7 +162,7 @@ std::string emitStruct(const TypeNode& node, Modes mode)
     auto out = std::ostringstream {};
     out << "struct " << node.typeName << "\n{\n";
 
-    emitStructFields(out, node);
+    emitStructFields(out, node, mode);
 
     if (mode == Modes::Miro)
         emitReflectMacro(out, node);
@@ -125,20 +171,37 @@ std::string emitStruct(const TypeNode& node, Modes mode)
     return out.str();
 }
 
-std::string emitEnum(const TypeNode& node)
+std::string emitUnionAlias(const TypeNode& node, Modes mode)
+{
+    auto out = std::ostringstream {};
+    out << "using " << node.typeName << " = " << renderVariantType(node, mode)
+        << ";\n";
+    return out.str();
+}
+
+std::string emitEnum(const TypeNode& node, Modes mode)
 {
     auto out = std::ostringstream {};
     out << "enum class " << node.typeName << "\n{\n";
 
-    auto first = true;
-    for (auto& v: node.enumValues)
+    for (auto i = 0; i < node.enumValues.size(); ++i)
     {
-        if (!first)
+        if (i > 0)
             out << ",\n";
-        first = false;
-        out << "    " << v;
+
+        out << "    " << node.enumValues[i];
+
+        // Only integer-format enums put their numbers on the wire, so
+        // only they need them pinned in the regenerated declaration.
+        if (node.enumIsInteger)
+            out << " = " << node.enumNumbers[i];
     }
     out << "\n};\n";
+
+    // The wire format is part of the type: without this the regenerated
+    // enum would save as names and no longer match the API it came from.
+    if (node.enumIsInteger && mode == Modes::Miro)
+        out << "\nMIRO_ENUM_AS_INTEGER(" << node.typeName << ")\n";
 
     return out.str();
 }
@@ -155,6 +218,7 @@ std::string formatHeader(std::span<TypeNode> roots, Modes mode)
     out << "#include <map>\n";
     out << "#include <optional>\n";
     out << "#include <string>\n";
+    out << "#include <variant>\n";
     out << "#include <vector>\n";
 
     if (mode == Modes::Miro)
@@ -165,7 +229,9 @@ std::string formatHeader(std::span<TypeNode> roots, Modes mode)
     for (auto* node: ordered)
     {
         if (node->shape == TypeNode::Shape::Enum)
-            out << emitEnum(*node) << "\n";
+            out << emitEnum(*node, mode) << "\n";
+        else if (node->shape == TypeNode::Shape::Union)
+            out << emitUnionAlias(*node, mode) << "\n";
         else
             out << emitStruct(*node, mode) << "\n";
     }

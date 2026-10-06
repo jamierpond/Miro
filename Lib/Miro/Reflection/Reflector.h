@@ -19,8 +19,20 @@ struct Property
     template <typename T>
     void operator()(T& value);
 
+    // Schema evolution for a renamed field: on load, a document without
+    // `key` is read from `previousKey` instead, so data written before
+    // the rename migrates in place. `key` wins when both are present.
+    // Saving and schema walks only ever see `key`.
+    //
+    //   ref["fieldTwo"].legacy("field2")(fieldTwo);
+    Property legacy(std::string_view previousKey) const
+    {
+        return {reflector, key, previousKey};
+    }
+
     Reflector& reflector;
     std::string_view key;
+    std::string_view legacyKey {};
 };
 
 struct Element

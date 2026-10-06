@@ -48,6 +48,12 @@ void reflectValue(Reflector& ref, std::vector<T>& value)
     }
     else
     {
+        // A missing key keeps the prior value, as it does for every
+        // other type — a field added with a non-empty default must not
+        // be wiped by reading data written before it existed.
+        if (ref.kind() == ValueKind::Absent)
+            return;
+
         value.resize(ref.arraySize());
 
         if constexpr (PackableElement<T>)
@@ -116,6 +122,10 @@ void reflectValue(Reflector& ref, std::map<std::string, V, Compare>& value)
     }
     else
     {
+        // As for std::vector: a missing key keeps the prior map.
+        if (ref.kind() == ValueKind::Absent)
+            return;
+
         value.clear();
         for (auto& key: ref.mapKeys())
         {
@@ -241,6 +251,10 @@ void reflectValue(Reflector& ref, EA::MapVector<std::string, V>& value)
     }
     else
     {
+        // As for std::vector: a missing key keeps the prior map.
+        if (ref.kind() == ValueKind::Absent)
+            return;
+
         value.clear();
         for (auto& key: ref.mapKeys())
         {

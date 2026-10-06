@@ -1,4 +1,5 @@
 #include "JsonReflector.h"
+#include "NumericConvert.h"
 
 #include <concepts>
 #include <type_traits>
@@ -69,9 +70,9 @@ void readSlotIntoPrimitive(const JSON& slot, T* ptr)
         // An integer slot is read exactly; a double one still converts,
         // so {"n": 5.0} keeps loading into an int field.
         if (slot.isInteger())
-            *ptr = static_cast<T>(slot.asInteger());
+            Detail::convertNumber(slot.asInteger(), *ptr);
         else if (slot.isNumber())
-            *ptr = static_cast<T>(slot.asNumber());
+            Detail::convertNumber(slot.asNumber(), *ptr);
     }
     else
     {

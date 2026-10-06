@@ -1,4 +1,5 @@
 #include "BinaryReflector.h"
+#include "NumericConvert.h"
 
 #include <cstring>
 
@@ -38,6 +39,16 @@ BinaryWriterReflector::~BinaryWriterReflector()
 {
     currentChild.reset();
 
+    if (pendingStart != Binary::npos)
+    {
+        writer.truncateTo(pendingStart);
+
+        if (pendingIsElement)
+            writer.writeTag(Tag::Null);
+
+        return;
+    }
+
     if (cancelled)
         return;
 
@@ -70,17 +81,44 @@ void BinaryWriterReflector::commitShape()
             break;
 
         case Shape::Array:
-            writer.writeTag(Tag::Array);
+            writeArrayHeader();
+            break;
+
+        case Shape::Raw:
+            // A raw JSON value: its kind is only known once the walk
+            // starts. Commit to an object, the way the JSON layer does;
+            // visit() / writeNull() / resizeArray() rewind and replace
+            // it when the value turns out to be something else.
+            writer.writeTag(Tag::Object);
             sizePos = writer.position();
-            writer.writeU32(0);
-            countPos = writer.position();
             writer.writeU32(0);
             break;
     }
 }
 
+void BinaryWriterReflector::writeArrayHeader()
+{
+    writer.writeTag(Tag::Array);
+    sizePos = writer.position();
+    writer.writeU32(0);
+    countPos = writer.position();
+    writer.writeU32(0);
+}
+
+void BinaryWriterReflector::markPresent()
+{
+    pendingStart = Binary::npos;
+}
+
 void BinaryWriterReflector::visit(PrimitiveRef ref)
 {
+    if (opts.shape == Shape::Raw)
+    {
+        // A raw scalar replaces the speculative object header.
+        writer.truncateTo(startPos);
+        sizePos = Binary::npos;
+    }
+
     std::visit(
         [this](auto* ptr)
         {
@@ -222,12 +260,19 @@ Reflector& BinaryWriterReflector::atKey(std::string_view key, Options childOpts)
     // may be appended until it has run.
     currentChild.reset();
 
+    auto keyStart = writer.position();
+
     if (opts.shape == Shape::Map)
         writer.writeString(key);
     else
         writer.writeVarint(writer.internKey(key));
 
-    return spawnChild(childOpts);
+    spawnChild(childOpts);
+
+    if (childOpts.omittable)
+        currentChild->pendingStart = keyStart;
+
+    return *currentChild;
 }
 
 Reflector& BinaryWriterReflector::atIndex(std::size_t index, Options childOpts)
@@ -237,11 +282,28 @@ Reflector& BinaryWriterReflector::atIndex(std::size_t index, Options childOpts)
     if (index + 1 > elementCount)
         elementCount = index + 1;
 
-    return spawnChild(childOpts);
+    auto elementStart = writer.position();
+    spawnChild(childOpts);
+
+    if (childOpts.omittable)
+    {
+        currentChild->pendingStart = elementStart;
+        currentChild->pendingIsElement = true;
+    }
+
+    return *currentChild;
 }
 
 void BinaryWriterReflector::resizeArray(std::size_t newSize)
 {
+    if (opts.shape == Shape::Raw && countPos == Binary::npos)
+    {
+        // A raw array: swap the speculative object header for an array
+        // one. Called before any element is written, so nothing is lost.
+        writer.truncateTo(startPos);
+        writeArrayHeader();
+    }
+
     if (newSize > elementCount)
         elementCount = newSize;
 }
@@ -312,6 +374,17 @@ ValueKind BinaryReaderReflector::kind() const
     return ValueKind::Absent;
 }
 
+bool BinaryReaderReflector::isIntegerNumber() const
+{
+    if (absent())
+        return false;
+
+    if (isPackedElement())
+        return elemTag == Tag::PackedInt32 || elemTag == Tag::PackedInt64;
+
+    return info.tag == Tag::Int;
+}
+
 double BinaryReaderReflector::packedElementNumber() const
 {
     auto reader = ByteReader {doc.bytes(), pos};
@@ -332,13 +405,15 @@ double BinaryReaderReflector::packedElementNumber() const
             return value;
         }
 
-        case Tag::PackedInt32:
-        case Tag::PackedInt64:
-            return static_cast<double>(reader.readZigzag());
-
         default:
-            return 0.0;
+            return static_cast<double>(packedElementInteger());
     }
+}
+
+std::int64_t BinaryReaderReflector::packedElementInteger() const
+{
+    auto reader = ByteReader {doc.bytes(), pos};
+    return reader.readZigzag();
 }
 
 void BinaryReaderReflector::visit(PrimitiveRef ref)
@@ -355,7 +430,12 @@ void BinaryReaderReflector::visit(PrimitiveRef ref)
             {
                 if constexpr (!std::same_as<T, bool>
                               && !std::same_as<T, std::string>)
-                    *ptr = static_cast<T>(packedElementNumber());
+                {
+                    if (elemTag == Tag::PackedInt32 || elemTag == Tag::PackedInt64)
+                        Detail::convertNumber(packedElementInteger(), *ptr);
+                    else
+                        Detail::convertNumber(packedElementNumber(), *ptr);
+                }
 
                 return;
             }
@@ -384,21 +464,24 @@ void BinaryReaderReflector::visit(PrimitiveRef ref)
             {
                 if (info.tag == Tag::Int)
                 {
-                    *ptr = static_cast<T>(reader.readZigzag());
+                    auto value = reader.readZigzag();
+
+                    if (reader.ok)
+                        Detail::convertNumber(value, *ptr);
                 }
                 else if (info.tag == Tag::Double)
                 {
                     auto value = double {};
 
                     if (reader.readRaw(&value, sizeof(value)))
-                        *ptr = static_cast<T>(value);
+                        Detail::convertNumber(value, *ptr);
                 }
                 else if (info.tag == Tag::Float32)
                 {
                     auto value = float {};
 
                     if (reader.readRaw(&value, sizeof(value)))
-                        *ptr = static_cast<T>(value);
+                        Detail::convertNumber(static_cast<double>(value), *ptr);
                 }
             }
         },
@@ -434,7 +517,7 @@ bool BinaryReaderReflector::visitPacked(PackedArrayRef ref)
                     {
                         auto value = float {};
                         reader.readRaw(&value, sizeof(value));
-                        dest[i] = static_cast<T>(value);
+                        Detail::convertNumber(static_cast<double>(value), dest[i]);
                     }
                 }
             }
@@ -450,14 +533,14 @@ bool BinaryReaderReflector::visitPacked(PackedArrayRef ref)
                     {
                         auto value = double {};
                         reader.readRaw(&value, sizeof(value));
-                        dest[i] = static_cast<T>(value);
+                        Detail::convertNumber(value, dest[i]);
                     }
                 }
             }
             else
             {
                 for (std::size_t i = 0; i < count; ++i)
-                    dest[i] = static_cast<T>(reader.readZigzag());
+                    Detail::convertNumber(reader.readZigzag(), dest[i]);
             }
         },
         ref.data);

@@ -570,3 +570,118 @@ auto binarySmallerThanJson = test("Binary: object array smaller than JSON") = []
     // Keys are interned once; JSON repeats "x" 500 times.
     check(binary.size() < json.size());
 };
+
+// --- Omittable<T> and raw JSON fields (upstream features, binary wire) ---
+
+namespace
+{
+
+struct BinaryPatch
+{
+    Omittable<std::string> name;
+    Omittable<int> count;
+    Omittable<Inner> inner;
+    Omittable<std::optional<int>> cleared;
+    int after = 0;
+
+    MIRO_REFLECT(name, count, inner, cleared, after)
+};
+
+struct BinaryOmittableElements
+{
+    std::vector<Omittable<int>> items;
+
+    MIRO_REFLECT(items)
+};
+
+struct BinaryRaw
+{
+    JSON value;
+    int after = 0;
+
+    MIRO_REFLECT(value, after)
+};
+
+} // namespace
+
+auto binaryOmittableAbsent = test("Binary: disengaged Omittable leaves no key") = []
+{
+    auto patch = BinaryPatch {};
+    patch.count = 3;
+    patch.after = 9;
+
+    auto bytes = toBinary(patch);
+    auto doc = Binary::Document {bytes};
+    check(doc.isValid());
+    check(!doc.root()["name"].isValid());
+    check(!doc.root()["inner"].isValid());
+    check(!doc.root()["cleared"].isValid());
+    check(doc.root()["count"].asInt() == 3);
+    check(doc.root()["after"].asInt() == 9);
+
+    auto loaded = createFromBinary<BinaryPatch>(bytes);
+    check(!loaded.name.has_value());
+    check(!loaded.inner.has_value());
+    check(!loaded.cleared.has_value());
+    check(loaded.count.has_value() && *loaded.count == 3);
+    check(loaded.after == 9);
+};
+
+auto binaryOmittableEngaged =
+    test("Binary: engaged Omittable round trips, null included") = []
+{
+    auto patch = BinaryPatch {};
+    patch.name = std::string {"n"};
+    patch.inner = Inner {5};
+    patch.cleared = std::optional<int> {};
+
+    auto loaded = binaryRoundTrip(patch);
+    check(loaded.name.has_value() && *loaded.name == "n");
+    check(loaded.inner.has_value() && loaded.inner->x == 5);
+    check(loaded.cleared.has_value() && !loaded.cleared->has_value());
+    check(!loaded.count.has_value());
+};
+
+auto binaryOmittableElements =
+    test("Binary: disengaged Omittable array element keeps the array intact") = []
+{
+    auto value = BinaryOmittableElements {};
+    value.items = {Omittable<int> {1}, Omittable<int> {}, Omittable<int> {3}};
+
+    auto loaded = binaryRoundTrip(value);
+    check(loaded.items.size() == 3);
+    check(loaded.items[0].has_value() && *loaded.items[0] == 1);
+    check(loaded.items[2].has_value() && *loaded.items[2] == 3);
+};
+
+auto binaryRawJson = test("Binary: raw JSON field round trips every kind") = []
+{
+    for (auto text: {R"({"a":1,"b":[true,null,"s",2.5],"c":{}})",
+                     R"([1,2,{"x":"y"}])",
+                     R"([])",
+                     R"({})",
+                     R"("text")",
+                     R"(42)",
+                     R"(-1.25)",
+                     R"(true)",
+                     R"(null)"})
+    {
+        auto value = BinaryRaw {};
+        value.value = Json::parse(text);
+        value.after = 7;
+
+        auto loaded = binaryRoundTrip(value);
+        check(Json::print(loaded.value) == Json::print(value.value));
+        check(loaded.after == 7);
+    }
+};
+
+auto binaryRawJsonInteger = test("Binary: raw JSON keeps integers exact") = []
+{
+    auto value = BinaryRaw {};
+    value.value = Json::parse("9007199254740993"); // 2^53 + 1
+
+    auto loaded = binaryRoundTrip(value);
+    check(loaded.value.isInteger());
+    check(loaded.value.asInteger() == 9007199254740993LL);
+};

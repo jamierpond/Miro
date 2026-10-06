@@ -1,5 +1,6 @@
 #pragma once
 
+#include "NumericConvert.h"
 #include "Omittable.h"
 #include "Reflector.h"
 #include "TypeName.h"
@@ -315,7 +316,17 @@ void reflectValue(Reflector& ref, T& value)
 {
     auto wide = static_cast<std::int64_t>(value);
     ref.visit(wide);
-    value = static_cast<T>(wide);
+
+    if (!ref.isLoading())
+        return;
+
+    // A uint64 travels as its int64 bit pattern, so a value past
+    // INT64_MAX arrives negative and must be reinterpreted, not refused.
+    // Every narrower type takes the loaded value only if it fits.
+    if constexpr (std::is_unsigned_v<T> && sizeof(T) == sizeof(std::int64_t))
+        value = static_cast<T>(wide);
+    else
+        convertNumber(wide, value);
 }
 
 template <std::floating_point T>
@@ -324,7 +335,9 @@ void reflectValue(Reflector& ref, T& value)
 {
     auto wide = static_cast<double>(value);
     ref.visit(wide);
-    value = static_cast<T>(wide);
+
+    if (ref.isLoading())
+        convertNumber(wide, value);
 }
 
 // Default fallback: a reflectable struct (member reflect() or external
@@ -361,9 +374,26 @@ template <typename T>
 void Property::operator()(T& value)
 {
     using Detail::reflectValue;
-    reflectValue(
-        reflector.atKey(key, Detail::childOptionsFor<T>(reflector.options())),
-        value);
+    auto childOpts = Detail::childOptionsFor<T>(reflector.options());
+
+    if (!legacyKey.empty() && reflector.isLoading() && !reflector.isSchema())
+    {
+        // Probe the current name first. The probe child is discarded
+        // untouched when absent, so a container field isn't cleared by
+        // the missing key before the legacy one is read.
+        auto& current = reflector.atKey(key, childOpts);
+
+        if (current.kind() != ValueKind::Absent)
+        {
+            reflectValue(current, value);
+            return;
+        }
+
+        reflectValue(reflector.atKey(legacyKey, childOpts), value);
+        return;
+    }
+
+    reflectValue(reflector.atKey(key, childOpts), value);
 }
 
 template <typename T>

@@ -28,11 +28,14 @@ public:
 
     void resizeArray(std::size_t newSize) override;
 
+    void markPresent() override;
+
     void requirePolymorphicSupport(std::string_view) override {}
 
 private:
     Reflector& spawnChild(Options childOpts);
     void commitShape();
+    void writeArrayHeader();
 
     void writePacked(std::span<float> values);
     void writePacked(std::span<double> values);
@@ -45,6 +48,15 @@ private:
     std::size_t countPos = Binary::npos;
     std::size_t elementCount = 0;
     bool cancelled = false;
+
+    // Set on the child slot of an Omittable<T> until it calls
+    // markPresent(): where this slot's bytes (an object field's key
+    // included) begin. Never claimed, the destructor rewinds to here so
+    // the key vanishes — or, for an array element, which can't be
+    // absent, leaves a Null in its place so the count stays right.
+    std::size_t pendingStart = Binary::npos;
+    bool pendingIsElement = false;
+
     OwningPointer<BinaryWriterReflector> currentChild;
 };
 
@@ -68,6 +80,7 @@ public:
     bool visitPacked(PackedArrayRef ref) override;
     void writeNull() override {}
     ValueKind kind() const override;
+    bool isIntegerNumber() const override;
 
     Reflector& atKey(std::string_view key, Options childOpts) override;
     Reflector& atIndex(std::size_t index, Options childOpts) override;
@@ -96,6 +109,7 @@ private:
     bool isPackedElement() const { return elemTag != Binary::Tag::Null; }
 
     double packedElementNumber() const;
+    std::int64_t packedElementInteger() const;
     std::size_t findObjectField(std::uint32_t keyId);
     std::size_t findMapEntry(std::string_view key);
 

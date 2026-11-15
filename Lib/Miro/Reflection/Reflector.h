@@ -7,6 +7,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -208,6 +209,49 @@ struct PackedArrayRef
     Variant data;
 };
 
+namespace Detail
+{
+
+template <typename Spans>
+struct NumberTypesOfSpans;
+
+template <typename... Numbers>
+struct NumberTypesOfSpans<std::variant<std::span<Numbers>...>>
+{
+    using Type = std::variant<std::type_identity<Numbers>...>;
+};
+
+} // namespace Detail
+
+// One of the number types PackedArrayRef can hold, named by type rather
+// than by value: std::visit gives back the C++ type.
+using PackedNumberType = Detail::NumberTypesOfSpans<PackedArrayRef::Variant>::Type;
+
+// One number inside a packable struct. A field of a nested struct is
+// flattened: Keyframe's `value.x` has the path {"value", "x"} and the
+// offset of x from the start of the Keyframe.
+struct PackedStructField
+{
+    std::span<const std::string_view> path;
+    PackedNumberType type;
+    std::size_t offset = 0;
+};
+
+// A contiguous array of structs made only of fixed-width numbers, handed
+// to a reflector in one call. Fields are listed in reflect order, which
+// need not be memory order. Saving: the bytes hold the elements to
+// write. Loading: the container was already resized to arraySize() and
+// default-constructed, so a field the reflector does not fill keeps its
+// default.
+struct PackedStructArrayRef
+{
+    std::size_t getElementCount() const { return elementBytes.size() / stride; }
+
+    std::span<std::byte> elementBytes;
+    std::size_t stride = 0;
+    std::span<const PackedStructField> fields;
+};
+
 // A Reflector represents exactly one slot in a tree. Configuration
 // (mode, shape, schema, nullable) is committed at construction time
 // via Options and stored in the base — most queries are non-virtual.
@@ -243,6 +287,10 @@ public:
 
     // Bulk fast path for contiguous numeric arrays (see PackedArrayRef).
     virtual bool visitPacked(PackedArrayRef /*ref*/) { return false; }
+
+    // Return true to take a whole array of packable structs at once; the
+    // default false reflects each element as an object.
+    virtual bool visitPackedStructs(PackedStructArrayRef /*ref*/) { return false; }
 
     // Refines ValueKind::Number for a format that stores an exact
     // integer apart from a double, the way the JSON layer does. Only a

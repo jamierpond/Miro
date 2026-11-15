@@ -1,5 +1,6 @@
 #pragma once
 
+#include "PackedStruct.h"
 #include "ReflectDispatch.h"
 
 #include <algorithm>
@@ -16,22 +17,17 @@
 namespace Miro::Detail
 {
 
-// The element types PackedArrayRef holds; everything else walks element
-// by element.
-template <typename T>
-concept PackableElement =
-    std::same_as<T, std::int8_t> || std::same_as<T, std::uint8_t>
-    || std::same_as<T, std::int16_t> || std::same_as<T, std::uint16_t>
-    || std::same_as<T, std::int32_t> || std::same_as<T, std::uint32_t>
-    || std::same_as<T, std::int64_t> || std::same_as<T, std::uint64_t>
-    || std::same_as<T, float> || std::same_as<T, double>;
-
 template <typename T>
 void reflectElements(Reflector& ref, std::span<T> elements, const Options& childOpts)
 {
     if constexpr (PackableElement<T>)
     {
         if (ref.visitPacked(PackedArrayRef {elements}))
+            return;
+    }
+    else if constexpr (PackableStruct<T>)
+    {
+        if (ref.visitPackedStructs(makePackedStructArrayRef(elements)))
             return;
     }
 

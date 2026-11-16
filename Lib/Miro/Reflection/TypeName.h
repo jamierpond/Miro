@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <string_view>
 
 namespace Miro::Detail
@@ -39,7 +40,7 @@ constexpr std::string_view rawTypeNameOf()
 // spelling to compare or hash across compilers — Clang/GCC don't emit
 // the keyword in __PRETTY_FUNCTION__, so this is a no-op there.
 template <typename T>
-constexpr std::string_view qualifiedNameOf()
+constexpr std::string_view parseQualifiedNameOf()
 {
     auto raw = rawTypeNameOf<T>();
     constexpr auto prefixes = std::array {
@@ -53,34 +54,65 @@ constexpr std::string_view qualifiedNameOf()
     return raw;
 }
 
+// Parsing __PRETTY_FUNCTION__ costs about 100 ns, so each type's name
+// is parsed once, at compile time, instead of on every object reflected.
+template <typename T>
+inline constexpr auto qualifiedNameOfType = parseQualifiedNameOf<T>();
+
+template <typename T>
+constexpr std::string_view qualifiedNameOf()
+{
+    return qualifiedNameOfType<T>;
+}
+
+constexpr bool isScopeSeparatorAt(std::string_view nameToUse, std::size_t index)
+{
+    return nameToUse[index] == ':' && nameToUse[index + 1] == ':';
+}
+
+// The rightmost "::" that is not inside template angle brackets, or npos.
+constexpr std::size_t
+    findLastScopeSeparatorOutsideTemplateArguments(std::string_view nameToUse)
+{
+    auto depth = 0;
+    auto lastSeparator = std::string_view::npos;
+
+    for (auto i = std::size_t {0}; i + 1 < nameToUse.size(); ++i)
+    {
+        if (nameToUse[i] == '<')
+            ++depth;
+        else if (nameToUse[i] == '>' && depth > 0)
+            --depth;
+        else if (depth == 0 && isScopeSeparatorAt(nameToUse, i))
+            lastSeparator = i;
+    }
+
+    return lastSeparator;
+}
+
 // Returns just the unqualified short name. Strips namespaces (incl.
 // "(anonymous namespace)::"). Templates and STL types are deliberately
 // left intact in the raw form — callers that want to filter them can
 // inspect for '<' / "std::" themselves.
 template <typename T>
-constexpr std::string_view typeNameOf()
+constexpr std::string_view parseTypeNameOf()
 {
     auto name = qualifiedNameOf<T>();
+    auto lastSeparator = findLastScopeSeparatorOutsideTemplateArguments(name);
 
-    // Find the rightmost "::" that is *not* inside template angle
-    // brackets, and trim everything before it.
-    auto depth = 0;
-    auto lastColon = std::string_view::npos;
-
-    for (auto i = std::size_t {0}; i + 1 < name.size(); ++i)
-    {
-        if (name[i] == '<')
-            ++depth;
-        else if (name[i] == '>' && depth > 0)
-            --depth;
-        else if (depth == 0 && name[i] == ':' && name[i + 1] == ':')
-            lastColon = i;
-    }
-
-    if (lastColon != std::string_view::npos)
-        name.remove_prefix(lastColon + 2);
+    if (lastSeparator != std::string_view::npos)
+        name.remove_prefix(lastSeparator + 2);
 
     return name;
+}
+
+template <typename T>
+inline constexpr auto typeNameOfType = parseTypeNameOf<T>();
+
+template <typename T>
+constexpr std::string_view typeNameOf()
+{
+    return typeNameOfType<T>;
 }
 
 // Compile-time extraction of a pointer-to-member's short name from

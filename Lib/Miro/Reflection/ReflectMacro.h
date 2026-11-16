@@ -1,5 +1,6 @@
 #pragma once
 
+#include "PackedStruct.h"
 #include "Reflector.h"
 
 #include <concepts>
@@ -103,6 +104,16 @@ class ApiReflector;
     macro(a, b) __VA_OPT__(MIRO_FOR_EACH_PAIR_AGAIN MIRO_PARENS(macro, __VA_ARGS__))
 #define MIRO_FOR_EACH_PAIR_AGAIN() MIRO_FOR_EACH_PAIR_HELPER
 
+// MIRO_FOR_EACH_PAIR with a fixed `extra` first argument:
+// macro(extra, a, b) macro(extra, c, d) ...
+#define MIRO_FOR_EACH_PAIR_WITH(macro, extra, ...)                                  \
+    __VA_OPT__(                                                                     \
+        MIRO_EXPAND(MIRO_FOR_EACH_PAIR_WITH_HELPER(macro, extra, __VA_ARGS__)))
+#define MIRO_FOR_EACH_PAIR_WITH_HELPER(macro, extra, a, b, ...)                     \
+    macro(extra, a, b) __VA_OPT__(                                                  \
+        MIRO_FOR_EACH_PAIR_WITH_AGAIN MIRO_PARENS(macro, extra, __VA_ARGS__))
+#define MIRO_FOR_EACH_PAIR_WITH_AGAIN() MIRO_FOR_EACH_PAIR_WITH_HELPER
+
 // Like MIRO_FOR_EACH, but threads a fixed `extra` argument through every
 // invocation: macro(extra, a) macro(extra, b) ... — used by MIRO_FIELDS
 // to bind the user-supplied reflector expression into each field call.
@@ -166,18 +177,63 @@ class ApiReflector;
         MIRO_FOR_EACH_WITH(MIRO_REFLECT_API_FIELD, r, __VA_ARGS__)                  \
     }
 
+// The field list MIRO_REFLECT emits beside reflect(), from which
+// PackedStruct.h decides at compile time whether the type is packable.
+// getMiroFieldListOwner() names the class that wrote the list, so a
+// derived class doesn't pass for its base.
+#define MIRO_FIELD_LIST_FROM(describedFields)                                       \
+    template <typename MiroSelf>                                                    \
+    static constexpr auto describeMiroFields()                                      \
+    {                                                                               \
+        return std::tuple_cat(std::tuple<> {} describedFields);                     \
+    }                                                                               \
+    auto getMiroFieldListOwner() const -> std::remove_cvref_t<decltype(*this)>*;
+
+#define MIRO_FIELD_LIST(...)                                                        \
+    MIRO_FIELD_LIST_FROM(                                                           \
+        MIRO_FOR_EACH_WITH(MIRO_DESCRIBE_FIELD, MiroSelf, __VA_ARGS__))
+
+#define MIRO_FIELD_LIST_NAMED(...)                                                  \
+    MIRO_FIELD_LIST_FROM(                                                           \
+        MIRO_FOR_EACH_PAIR_WITH(MIRO_DESCRIBE_FIELD_NAMED, MiroSelf, __VA_ARGS__))
+
 #define MIRO_REFLECT(...)                                                           \
     template <std::derived_from<Miro::Reflector> MiroReflectorType>                 \
-    void reflect(MiroReflectorType& __VA_OPT__(ref))                                \
-    {                                                                               \
-        MIRO_FIELDS(ref, __VA_ARGS__)                                               \
-    }
+    void reflect(MiroReflectorType& __VA_OPT__(ref)) {                              \
+        MIRO_FIELDS(ref, __VA_ARGS__)} MIRO_FIELD_LIST(__VA_ARGS__)
 
 #define MIRO_REFLECT_EXTERNAL_FIELD(field) ref[#field](valueToUse.field);
+
+// The external counterpart of MIRO_FIELD_LIST. describeFields() is a
+// template so the offsetof of a non-standard-layout Type sits in a
+// discarded branch that is never instantiated.
+#define MIRO_EXTERNAL_FIELD_LIST_FROM(Type, describedFields)                        \
+    template <>                                                                     \
+    struct ExternalFields<Type>                                                     \
+    {                                                                               \
+        static constexpr bool isDeclared = true;                                    \
+                                                                                    \
+        template <typename MiroSelf>                                                \
+        static constexpr auto describeFields()                                      \
+        {                                                                           \
+            return std::tuple_cat(std::tuple<> {} describedFields);                 \
+        }                                                                           \
+    };
+
+#define MIRO_EXTERNAL_FIELD_LIST(Type, ...)                                         \
+    MIRO_EXTERNAL_FIELD_LIST_FROM(                                                  \
+        Type, MIRO_FOR_EACH_WITH(MIRO_DESCRIBE_FIELD, MiroSelf, __VA_ARGS__))
+
+#define MIRO_EXTERNAL_FIELD_LIST_NAMED(Type, ...)                                   \
+    MIRO_EXTERNAL_FIELD_LIST_FROM(                                                  \
+        Type,                                                                       \
+        MIRO_FOR_EACH_PAIR_WITH(MIRO_DESCRIBE_FIELD_NAMED, MiroSelf, __VA_ARGS__))
 
 #define MIRO_REFLECT_EXTERNAL(Type, ...)                                            \
     namespace Miro                                                                  \
     {                                                                               \
+    MIRO_EXTERNAL_FIELD_LIST(Type, __VA_ARGS__)                                     \
+                                                                                    \
     template <std::derived_from<Miro::Reflector> MiroReflectorType>                 \
     void reflect(MiroReflectorType& __VA_OPT__(ref), Type& __VA_OPT__(valueToUse))  \
     {                                                                               \
@@ -189,16 +245,16 @@ class ApiReflector;
 
 #define MIRO_REFLECT_MEMBERS(...)                                                   \
     template <std::derived_from<Miro::Reflector> MiroReflectorType>                 \
-    void reflect(MiroReflectorType& __VA_OPT__(ref))                                \
-    {                                                                               \
-        MIRO_FOR_EACH_PAIR(MIRO_REFLECT_NAMED_FIELD, __VA_ARGS__)                   \
-    }
+    void reflect(MiroReflectorType& __VA_OPT__(ref)) {MIRO_FOR_EACH_PAIR(           \
+        MIRO_REFLECT_NAMED_FIELD, __VA_ARGS__)} MIRO_FIELD_LIST_NAMED(__VA_ARGS__)
 
 #define MIRO_REFLECT_EXTERNAL_NAMED_FIELD(field, key) ref[key](valueToUse.field);
 
 #define MIRO_REFLECT_EXTERNAL_MEMBERS(Type, ...)                                    \
     namespace Miro                                                                  \
     {                                                                               \
+    MIRO_EXTERNAL_FIELD_LIST_NAMED(Type, __VA_ARGS__)                               \
+                                                                                    \
     template <std::derived_from<Miro::Reflector> MiroReflectorType>                 \
     void reflect(MiroReflectorType& __VA_OPT__(ref), Type& __VA_OPT__(valueToUse))  \
     {                                                                               \
@@ -244,4 +300,32 @@ class ApiReflector;
             [&](auto& __VA_OPT__(d))                                                \
             { MIRO_FOR_EACH_PAIR(MIRO_POLY_ALT_PAIR, __VA_ARGS__) });               \
     }                                                                               \
+    }
+
+#define MIRO_PACKED_FIELD(Type, field, key)                                         \
+    , Miro::Detail::describeField<decltype(Type::field)>(key, offsetof(Type, field))
+
+// Lets a type whose reflect() is written by hand pack in arrays, given
+// (member, "key") pairs that must match what its reflect() writes:
+//   MIRO_PACKED(Game::Vec3, x, "x", y, "y", z, "z")
+// At global scope, after the type is complete, like MIRO_ENUM_AS_INTEGER.
+// Every member must be a fixed-width number or a packable struct.
+#define MIRO_PACKED(Type, ...)                                                      \
+    namespace Miro                                                                  \
+    {                                                                               \
+    template <>                                                                     \
+    struct PackedFields<Type>                                                       \
+    {                                                                               \
+        static constexpr bool isDeclared = true;                                    \
+                                                                                    \
+        static constexpr auto describeFields()                                      \
+        {                                                                           \
+            static_assert(std::is_standard_layout_v<Type>                           \
+                              && std::is_trivially_copyable_v<Type>,                \
+                          "MIRO_PACKED needs a standard-layout, trivially "         \
+                          "copyable type");                                         \
+            return std::tuple_cat(std::tuple<> {                                    \
+            } MIRO_FOR_EACH_PAIR_WITH(MIRO_PACKED_FIELD, Type, __VA_ARGS__));       \
+        }                                                                           \
+    };                                                                              \
     }

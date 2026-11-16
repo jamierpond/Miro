@@ -1,5 +1,6 @@
 #pragma once
 
+#include "NumericConvert.h"
 #include "Omittable.h"
 #include "Reflector.h"
 #include "TypeName.h"
@@ -318,7 +319,17 @@ void reflectValue(Reflector& ref, T& value)
 {
     auto wide = static_cast<std::int64_t>(value);
     ref.visit(wide);
-    value = static_cast<T>(wide);
+
+    if (!ref.isLoading())
+        return;
+
+    // A uint64 travels as its int64 bit pattern, so a value past
+    // INT64_MAX arrives negative and must be reinterpreted, not refused.
+    // Every narrower type takes the loaded value only if it fits.
+    if constexpr (std::is_unsigned_v<T> && sizeof(T) == sizeof(std::int64_t))
+        value = static_cast<T>(wide);
+    else
+        convertNumber(wide, value);
 }
 
 template <std::floating_point T>
@@ -327,7 +338,9 @@ void reflectValue(Reflector& ref, T& value)
 {
     auto wide = static_cast<double>(value);
     ref.visit(wide);
-    value = static_cast<T>(wide);
+
+    if (ref.isLoading())
+        convertNumber(wide, value);
 }
 
 // A reflectable struct's walk once visitObject has declined it: the

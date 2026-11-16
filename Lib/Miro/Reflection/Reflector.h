@@ -484,6 +484,12 @@ public:
     // Iteration helpers — only meaningful inside an Array / Map slot.
     // Default to "empty" so reflectors with nothing useful to report
     // (e.g. SchemaReflector) need not override.
+    // Called on a load when Miro refuses the value this slot holds, such
+    // as 1000 for a std::int8_t field. The field keeps its prior value.
+    // The default ignores it; a reflector that reports problems hears of
+    // the refusals it can't see itself here.
+    virtual void reportRefusedValue() {}
+
     virtual std::size_t arraySize() const { return 0; }
     virtual void resizeArray(std::size_t /*newSize*/) {}
     virtual Vector<std::string> mapKeys() const { return {}; }

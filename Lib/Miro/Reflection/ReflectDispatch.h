@@ -328,8 +328,8 @@ void reflectValue(Reflector& ref, T& value)
     // Every narrower type takes the loaded value only if it fits.
     if constexpr (std::is_unsigned_v<T> && sizeof(T) == sizeof(std::int64_t))
         value = static_cast<T>(wide);
-    else
-        convertNumber(wide, value);
+    else if (!convertNumber(wide, value))
+        ref.reportRefusedValue();
 }
 
 template <std::floating_point T>
@@ -339,8 +339,8 @@ void reflectValue(Reflector& ref, T& value)
     auto wide = static_cast<double>(value);
     ref.visit(wide);
 
-    if (ref.isLoading())
-        convertNumber(wide, value);
+    if (ref.isLoading() && !convertNumber(wide, value))
+        ref.reportRefusedValue();
 }
 
 // A reflectable struct's walk once visitObject has declined it: the

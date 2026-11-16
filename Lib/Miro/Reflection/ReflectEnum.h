@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Detail/StringUtilities.h"
+#include "NumericConvert.h"
 #include "Reflector.h"
 #include "TypeName.h"
 
@@ -222,11 +223,34 @@ std::int64_t enumToNumber(T value)
     return static_cast<std::int64_t>(static_cast<std::underlying_type_t<T>>(value));
 }
 
+// Nothing when the number doesn't fit the underlying type. A number that
+// fits but names no enumerator loads as it is, so such a value round-trips.
 template <typename T>
     requires std::is_enum_v<T>
-T enumFromNumber(std::int64_t numeric)
+std::optional<T> enumFromNumber(std::int64_t numeric)
 {
-    return static_cast<T>(static_cast<std::underlying_type_t<T>>(numeric));
+    auto underlying = std::underlying_type_t<T> {};
+
+    if (!convertNumber(numeric, underlying))
+        return std::nullopt;
+
+    return static_cast<T>(underlying);
+}
+
+template <typename T>
+    requires std::is_enum_v<T>
+std::optional<T> enumFromText(std::string_view text)
+{
+    if (auto parsed = enumFromString<T>(text))
+        return parsed;
+
+    if constexpr (EnumFormat<T>::integer)
+    {
+        if (auto numeric = parseWholeInteger(text))
+            return enumFromNumber<T>(*numeric);
+    }
+
+    return std::nullopt;
 }
 
 template <typename T>
@@ -266,30 +290,29 @@ template <typename T>
 void loadEnum(Reflector& ref, T& value)
 {
     auto kind = ref.kind();
+    auto loaded = std::optional<T> {};
 
     if (kind == ValueKind::String)
     {
         auto text = std::string {};
         ref.visit(text);
-
-        if (auto parsed = enumFromString<T>(text))
-        {
-            value = *parsed;
-            return;
-        }
-
-        if constexpr (EnumFormat<T>::integer)
-        {
-            if (auto numeric = parseWholeInteger(text))
-                value = enumFromNumber<T>(*numeric);
-        }
+        loaded = enumFromText<T>(text);
     }
     else if (kind == ValueKind::Number)
     {
         auto numeric = std::int64_t {};
         ref.visit(numeric);
-        value = enumFromNumber<T>(numeric);
+        loaded = enumFromNumber<T>(numeric);
     }
+    else
+    {
+        return;
+    }
+
+    if (loaded)
+        value = *loaded;
+    else
+        ref.reportRefusedValue();
 }
 
 template <typename T>

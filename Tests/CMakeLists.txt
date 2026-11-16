@@ -17,6 +17,7 @@ nano_add_executable(MiroTests SOURCES
         XmlTests.cpp
         ReflectorTests.cpp
         PackedArrayTests.cpp
+        MissingContainerTests.cpp
         TypeIdTests.cpp
         XmlReflectorTests.cpp
         CommandTableTests.cpp

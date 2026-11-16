@@ -54,6 +54,11 @@ void reflectValue(Reflector& ref, std::vector<T>& value)
     }
     else
     {
+        // A missing key keeps the prior value, so a field added with a
+        // non-empty default survives loading data written before it.
+        if (ref.kind() == ValueKind::Absent)
+            return;
+
         value.resize(ref.arraySize());
         reflectElements(ref, std::span<T> {value}, childOpts);
     }
@@ -106,6 +111,9 @@ void reflectValue(Reflector& ref, std::map<std::string, V, Compare>& value)
     }
     else
     {
+        if (ref.kind() == ValueKind::Absent)
+            return;
+
         value.clear();
         for (auto& key: ref.mapKeys())
         {
@@ -237,6 +245,9 @@ void reflectValue(Reflector& ref, EA::MapVector<std::string, V>& value)
     }
     else
     {
+        if (ref.kind() == ValueKind::Absent)
+            return;
+
         value.clear();
         for (auto& key: ref.mapKeys())
         {

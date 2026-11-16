@@ -96,7 +96,14 @@ struct ObjectRecorder : Reflector
 
     void visit(PrimitiveRef) override { log.events.push_back("prim"); }
     void writeNull() override {}
-    ValueKind kind() const override { return ValueKind::Absent; }
+    ValueKind kind() const override
+    {
+        if (shape() == Shape::Array)
+            return ValueKind::Array;
+
+        return ValueKind::Object;
+    }
+
     std::size_t arraySize() const override { return 2; }
 
     Reflector& atKey(std::string_view key, Options childOpts) override

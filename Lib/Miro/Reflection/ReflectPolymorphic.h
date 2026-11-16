@@ -96,6 +96,23 @@ struct PolymorphicAccess<OwningPointer<Base>>
     }
 };
 
+template <typename Value>
+inline constexpr bool isOwningPointer = false;
+
+template <typename T>
+inline constexpr bool isOwningPointer<OwningPointer<T>> = true;
+
+// Loading alternative T into an OwningPointer allocates it on the heap, so
+// the reflector is asked first; a variant holds T inline and allocates nothing.
+template <typename Value, typename T>
+bool approveAlternativeAllocation(Reflector& ref)
+{
+    if constexpr (isOwningPointer<Value>)
+        return ref.approveElementAllocation(1, sizeof(T));
+    else
+        return true;
+}
+
 } // namespace Miro::Detail
 
 namespace Miro
@@ -141,7 +158,8 @@ public:
         }
         else
         {
-            if (tag == loadedTag)
+            if (tag == loadedTag
+                && Detail::approveAlternativeAllocation<Value, T>(ref))
             {
                 auto& slot =
                     Detail::PolymorphicAccess<Value>::template assign<T>(value);

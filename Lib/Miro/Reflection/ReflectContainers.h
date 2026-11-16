@@ -59,7 +59,12 @@ void reflectValue(Reflector& ref, std::vector<T>& value)
         if (ref.kind() == ValueKind::Absent)
             return;
 
-        value.resize(ref.arraySize());
+        auto count = ref.arraySize();
+
+        if (!ref.approveElementAllocation(count, sizeof(T)))
+            return;
+
+        value.resize(count);
         reflectElements(ref, std::span<T> {value}, childOpts);
     }
 }
@@ -114,8 +119,16 @@ void reflectValue(Reflector& ref, std::map<std::string, V, Compare>& value)
         if (ref.kind() == ValueKind::Absent)
             return;
 
+        auto keys = ref.mapKeys();
+        using Entry = typename std::map<std::string, V, Compare>::value_type;
+
+        auto keyCount = static_cast<std::size_t>(keys.size());
+
+        if (!ref.approveElementAllocation(keyCount, sizeof(Entry)))
+            return;
+
         value.clear();
-        for (auto& key: ref.mapKeys())
+        for (auto& key: keys)
         {
             auto element = V {};
             reflectValue(ref.atKey(key, childOpts), element);
@@ -248,8 +261,16 @@ void reflectValue(Reflector& ref, EA::MapVector<std::string, V>& value)
         if (ref.kind() == ValueKind::Absent)
             return;
 
+        auto keys = ref.mapKeys();
+        using Entry = typename EA::MapVector<std::string, V>::ElementType;
+
+        auto keyCount = static_cast<std::size_t>(keys.size());
+
+        if (!ref.approveElementAllocation(keyCount, sizeof(Entry)))
+            return;
+
         value.clear();
-        for (auto& key: ref.mapKeys())
+        for (auto& key: keys)
         {
             auto& slot = value[key];
             reflectValue(ref.atKey(key, childOpts), slot);
@@ -286,7 +307,8 @@ void reflectValue(Reflector& ref, OwningPointer<T>& value)
         {
             value.reset();
         }
-        else if (k != ValueKind::Absent)
+        else if (k != ValueKind::Absent
+                 && ref.approveElementAllocation(1, sizeof(T)))
         {
             value.create();
             reflectValue(ref, *value);

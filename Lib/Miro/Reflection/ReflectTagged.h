@@ -271,6 +271,12 @@ private:
     template <typename T>
     void load()
     {
+        if (!Detail::approveAlternativeAllocation<Value, T>(ref))
+        {
+            matched = true;
+            return;
+        }
+
         auto& slot = Detail::PolymorphicAccess<Value>::template assign<T>(value);
         Detail::reflectValue(ref, slot);
         matched = true;

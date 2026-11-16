@@ -488,6 +488,19 @@ public:
     virtual void resizeArray(std::size_t /*newSize*/) {}
     virtual Vector<std::string> mapKeys() const { return {}; }
 
+    // Asked on a load before a container allocates for its stored
+    // elements: a vector before it resizes, a map before it adds its
+    // entries, an OwningPointer before it creates its object. Returning
+    // false leaves the container as it was. A binary format can store an
+    // element in one byte that becomes kilobytes in memory, so a
+    // reflector reading untrusted data refuses here to cap a load's
+    // memory. The default approves everything.
+    virtual bool approveElementAllocation(std::size_t /*elementCount*/,
+                                          std::size_t /*elementSizeInBytes*/)
+    {
+        return true;
+    }
+
     // Schema hint for fixed-size arrays. Called from the std::array /
     // EA::Array dispatcher with the compile-time N as both min and max.
     // Reflectors that don't care (the JSON reflector) keep the no-op

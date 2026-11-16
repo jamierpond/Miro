@@ -204,9 +204,36 @@ class ApiReflector;
 
 #define MIRO_REFLECT_EXTERNAL_FIELD(field) ref[#field](valueToUse.field);
 
+// The external counterpart of MIRO_FIELD_LIST. describeFields() is a
+// template so the offsetof of a non-standard-layout Type sits in a
+// discarded branch that is never instantiated.
+#define MIRO_EXTERNAL_FIELD_LIST_FROM(Type, describedFields)                        \
+    template <>                                                                     \
+    struct ExternalFields<Type>                                                     \
+    {                                                                               \
+        static constexpr bool isDeclared = true;                                    \
+                                                                                    \
+        template <typename MiroSelf>                                                \
+        static constexpr auto describeFields()                                      \
+        {                                                                           \
+            return std::tuple_cat(std::tuple<> {} describedFields);                 \
+        }                                                                           \
+    };
+
+#define MIRO_EXTERNAL_FIELD_LIST(Type, ...)                                         \
+    MIRO_EXTERNAL_FIELD_LIST_FROM(                                                  \
+        Type, MIRO_FOR_EACH_WITH(MIRO_DESCRIBE_FIELD, MiroSelf, __VA_ARGS__))
+
+#define MIRO_EXTERNAL_FIELD_LIST_NAMED(Type, ...)                                   \
+    MIRO_EXTERNAL_FIELD_LIST_FROM(                                                  \
+        Type,                                                                       \
+        MIRO_FOR_EACH_PAIR_WITH(MIRO_DESCRIBE_FIELD_NAMED, MiroSelf, __VA_ARGS__))
+
 #define MIRO_REFLECT_EXTERNAL(Type, ...)                                            \
     namespace Miro                                                                  \
     {                                                                               \
+    MIRO_EXTERNAL_FIELD_LIST(Type, __VA_ARGS__)                                     \
+                                                                                    \
     template <std::derived_from<Miro::Reflector> MiroReflectorType>                 \
     void reflect(MiroReflectorType& __VA_OPT__(ref), Type& __VA_OPT__(valueToUse))  \
     {                                                                               \
@@ -226,6 +253,8 @@ class ApiReflector;
 #define MIRO_REFLECT_EXTERNAL_MEMBERS(Type, ...)                                    \
     namespace Miro                                                                  \
     {                                                                               \
+    MIRO_EXTERNAL_FIELD_LIST_NAMED(Type, __VA_ARGS__)                               \
+                                                                                    \
     template <std::derived_from<Miro::Reflector> MiroReflectorType>                 \
     void reflect(MiroReflectorType& __VA_OPT__(ref), Type& __VA_OPT__(valueToUse))  \
     {                                                                               \

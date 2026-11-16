@@ -29,6 +29,14 @@ struct PackedFields
     static constexpr bool isDeclared = false;
 };
 
+// The field list of a type reflected outside its class. Specialized by
+// MIRO_REFLECT_EXTERNAL and MIRO_REFLECT_EXTERNAL_MEMBERS.
+template <typename T>
+struct ExternalFields
+{
+    static constexpr bool isDeclared = false;
+};
+
 namespace Detail
 {
 
@@ -69,10 +77,19 @@ template <typename T>
 concept HasDeclaredFieldList = PackedFields<T>::isDeclared;
 
 template <typename T>
+concept HasExternalFieldList = ExternalFields<T>::isDeclared;
+
+template <typename T>
+concept HasFieldList =
+    HasMacroFieldList<T> || HasDeclaredFieldList<T> || HasExternalFieldList<T>;
+
+template <typename T>
 constexpr auto getFieldDescriptions()
 {
     if constexpr (HasDeclaredFieldList<T>)
         return PackedFields<T>::describeFields();
+    else if constexpr (HasExternalFieldList<T>)
+        return ExternalFields<T>::template describeFields<T>();
     else
         return T::template describeMiroFields<T>();
 }
@@ -105,7 +122,7 @@ constexpr bool areAllFieldsPackable()
 template <typename T>
 constexpr bool isPackableStruct()
 {
-    if constexpr (!HasMacroFieldList<T> && !HasDeclaredFieldList<T>)
+    if constexpr (!HasFieldList<T>)
         return false;
     else if constexpr (!std::is_standard_layout_v<T>
                        || !std::is_trivially_copyable_v<T>)

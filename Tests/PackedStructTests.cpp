@@ -33,6 +33,9 @@ static_assert(!Detail::PackableStruct<WithFlag>);
 static_assert(!Detail::PackableStruct<DerivedWithoutOwnList>);
 static_assert(!Detail::PackableStruct<HandWrittenNotDeclared>);
 static_assert(!Detail::PackableStruct<float>);
+static_assert(Detail::PackableStruct<ExternalVec3>);
+static_assert(Detail::PackableStruct<ExternalRenamedSize>);
+static_assert(!Detail::PackableStruct<ExternalLabelledPoint>);
 
 constexpr auto keyframeFieldCount = std::size_t {9};
 static_assert(Detail::PackedStructLayout<Keyframe>::fields.size()
@@ -253,6 +256,41 @@ auto declaredHandWrittenPacks =
 
     check(log.packedStructCalls == 1);
     check(log.fieldPaths == std::vector<Path> {{"id"}, {"weight"}});
+};
+
+auto externalStructsPack =
+    test("Packed structs: MIRO_REFLECT_EXTERNAL number structs pack undeclared") = []
+{
+    auto points = std::vector<ExternalVec3>(2);
+    auto log = reflectThroughProbe(points, Mode::Save, true);
+
+    check(log.packedStructCalls == 1);
+    check(log.stride == sizeof(ExternalVec3));
+    check(log.fieldPaths == std::vector<Path> {{"x"}, {"y"}, {"z"}});
+    check(log.fieldOffsets
+          == Offsets {offsetof(ExternalVec3, x),
+                      offsetof(ExternalVec3, y),
+                      offsetof(ExternalVec3, z)});
+};
+
+auto externalRenamedStructsPack =
+    test("Packed structs: MIRO_REFLECT_EXTERNAL_MEMBERS packs under its keys") = []
+{
+    auto sizes = std::vector<ExternalRenamedSize>(2);
+    auto log = reflectThroughProbe(sizes, Mode::Save, true);
+
+    check(log.packedStructCalls == 1);
+    check(log.fieldPaths == std::vector<Path> {{"w"}, {"h"}});
+};
+
+auto externalStructWithTextWalks =
+    test("Packed structs: an external struct with a string walks") = []
+{
+    auto labelled = std::vector<ExternalLabelledPoint>(2);
+    auto log = reflectThroughProbe(labelled, Mode::Save, true);
+
+    check(log.packedStructCalls == 0);
+    check(log.objectVisits == labelled.size());
 };
 
 auto jsonIsUnchanged =

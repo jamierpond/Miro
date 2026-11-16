@@ -104,9 +104,32 @@ struct HandWritten
     }
 };
 
+struct ExternalVec3
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+};
+
+struct ExternalLabelledPoint
+{
+    float x = 0.0f;
+    std::string label;
+};
+
+struct ExternalRenamedSize
+{
+    std::int32_t width = 0;
+    std::int32_t height = 0;
+};
+
 } // namespace PackedStructTestTypes
 
 MIRO_PACKED(PackedStructTestTypes::HandWritten, id, "id", weight, "weight")
+MIRO_REFLECT_EXTERNAL(PackedStructTestTypes::ExternalVec3, x, y, z)
+MIRO_REFLECT_EXTERNAL(PackedStructTestTypes::ExternalLabelledPoint, x, label)
+MIRO_REFLECT_EXTERNAL_MEMBERS(
+    PackedStructTestTypes::ExternalRenamedSize, width, "w", height, "h")
 
 namespace PackedStructTestTypes
 {
